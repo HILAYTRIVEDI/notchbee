@@ -10,6 +10,6 @@ echo "Stub engine for static analysis." > "$root/build/engine/THIRD_PARTY_NOTICE
 cd "$root/Notchpilot"
 xcodegen generate
 xcodebuild -project Notchpilot.xcodeproj -scheme Notchpilot -configuration Debug \
-  -destination 'platform=macOS,arch=arm64' -derivedDataPath "$root/build/codeql" \
+  -destination 'generic/platform=macOS' -derivedDataPath "$root/build/codeql" \
   CODE_SIGN_IDENTITY=- build
 swift build --package-path "$root/NotchpilotCore" --build-tests
