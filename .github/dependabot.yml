@@ -1,0 +1,17 @@
+# GitHub Actions and the Swift package are checked weekly. The app's Swift packages are
+# pinned in Notchpilot/project.yml (XcodeGen), which Dependabot cannot update; review
+# them by hand. The engine's Bun lockfile follows the upstream fork and is updated
+# with each engine sync, so it has no version updates here.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: swift
+    directory: /NotchpilotCore
+    schedule:
+      interval: weekly

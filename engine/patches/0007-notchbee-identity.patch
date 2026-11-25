@@ -1,0 +1,11 @@
+diff --git a/packages/contracts/src/engineBrand.ts b/packages/contracts/src/engineBrand.ts
+index 7ed9211..415b327 100644
+--- a/packages/contracts/src/engineBrand.ts
++++ b/packages/contracts/src/engineBrand.ts
+@@ -1,5 +1,5 @@
+ // Product identity. Protocol names and provider-specific identifiers remain stable.
+-export const productName = "Notchpilot";
++export const productName = "Notchbee";
+ export const engineName = `${productName.toLowerCase()}-engine`;
+ export const engineEnv = (key: string) => `${productName.toUpperCase()}_ENGINE_${key}`;
+ export const engineUserAgent = `${productName}-Engine`;

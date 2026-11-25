@@ -1,0 +1,920 @@
+diff --git a/apps/server/src/bin.ts b/apps/server/src/bin.ts
+index b69fa6e..277cb9a 100644
+--- a/apps/server/src/bin.ts
++++ b/apps/server/src/bin.ts
+@@ -1,49 +1,7 @@
+-// @effect-diagnostics nodeBuiltinImport:off -- The service launcher starts before the CLI runtime.
+-import * as NodeModule from "node:module";
+-import * as NodeSea from "node:sea";
+-import * as NodeURL from "node:url";
++import { runCliCommand } from "./binMain.ts";
+ 
+-import { isEntrypoint } from "./entrypoint.ts";
+-
+-// Loads the CLI outside the launcher's module graph. Packaged builds embed it as a raw asset.
+-async function loadCliMain(): Promise<typeof import("./binMain.ts")> {
+-  if (!NodeSea.isSea()) return import("./binMain.ts");
+-
+-  // Keep the executable's module URL so the CLI finds the web client and native packages beside it.
+-  const require = NodeModule.createRequire(import.meta.url);
+-  // require() resolves links in the executable path, such as a Windows junction.
+-  const cliUrl = NodeURL.pathToFileURL(require.resolve(process.execPath)).href;
+-  const hook = NodeModule.registerHooks({
+-    load(url, context, next) {
+-      if (url !== cliUrl) return next(url, context);
+-      return {
+-        format: "module",
+-        source: new Uint8Array(NodeSea.getRawAsset("binMain.mjs")),
+-        shortCircuit: true,
+-      };
+-    },
+-  });
+-  try {
+-    return require(process.execPath) as typeof import("./binMain.ts");
+-  } finally {
+-    hook.deregister();
+-  }
+-}
+-
+-if (
+-  isEntrypoint({
+-    moduleUrl: import.meta.url,
+-    entryPath: process.argv[1],
+-    runtimeMain: import.meta.main,
+-  })
+-) {
+-  // The launcher owns shutdown until its child exits, so it bypasses the Effect CLI runtime.
+-  // The service unit passes no arguments; flags and help go through the full CLI.
+-  if (process.argv[2] === "__service-launcher" && process.argv.length === 3) {
+-    const { runServiceLauncherCli } = await import("./cli/serviceLauncher.ts");
+-    await runServiceLauncherCli();
+-  } else {
+-    const { runCliCommand } = await loadCliMain();
+-    await runCliCommand();
+-  }
++// Ambient T3 launch configuration can refer to an independent installation.
++for (const key of Object.keys(process.env)) {
++  if (key.startsWith("T3CODE_")) delete process.env[key];
+ }
++await runCliCommand();
+diff --git a/apps/server/src/binMain.ts b/apps/server/src/binMain.ts
+index 0dabd73..5c1edb4 100644
+--- a/apps/server/src/binMain.ts
++++ b/apps/server/src/binMain.ts
+@@ -1,13 +1,5 @@
+-import { enableCliCompileCache } from "./cliCompileCache.ts";
+-
+-// Packaged builds load this graph with require(esm): top-level await anywhere in it breaks them.
+-// ACP agents spawn `acp-mcp-bridge` per session and `acp-mcp-call` per tool call, so those fast
+-// paths dispatch before the full CLI module graph (seconds of evaluation) loads.
+ export async function runCliCommand() {
+   const command = process.argv[2];
+-  // Install the socket guard before importing code that can open outbound connections.
+-  const { ignoreMacosTypeOfServiceEinval } = await import("./outboundHttp.ts");
+-  ignoreMacosTypeOfServiceEinval();
+   if (command === "__document-text") {
+     const { extractDocumentText } = await import("./provider/documentTextWorker.ts");
+     try {
+@@ -16,7 +8,6 @@ export async function runCliCommand() {
+       if (error instanceof Error && "code" in error && /^E[A-Z0-9]+$/.test(String(error.code))) {
+         throw error;
+       }
+-      // Exit 2 identifies document rejections; OS and process failures remain retryable.
+       process.exitCode = 2;
+     }
+   } else if (command === "__managed-chatgpt-token") {
+@@ -25,21 +16,8 @@ export async function runCliCommand() {
+   } else if (command === "acp-mcp-bridge" || command === "acp-mcp-call") {
+     const { runAcpMcpCliFastPath } = await import("./mcp/AcpMcpStdioBridge.ts");
+     await runAcpMcpCliFastPath(command, process.argv.slice(3));
+-  } else if (command === "__speech-worker") {
+-    const mode = process.argv[3];
+-    if (mode !== "discover" && mode !== "model") throw new Error("Unknown speech worker mode.");
+-    const { runNativeSpeechWorker } = await import("./speech/native.ts");
+-    await runNativeSpeechWorker(mode, process.argv[4]);
+   } else {
+-    enableCliCompileCache();
+-    // Windows desktop launches without stdin; attach before reading, except on fast paths using pipes.
+-    const { attachConsoleStdin } = await import("./cli/consoleStdin.ts");
+-    attachConsoleStdin();
+-    const importStart = performance.now();
+-    const { runCli } = await import("./binCli.ts");
+-    if (process.env.T3CODE_STARTUP_PROFILE_DIR) {
+-      performance.measure("server.import.binCli", { start: importStart });
+-    }
+-    runCli();
++    const { runEngineCli } = await import("./engineCli.ts");
++    runEngineCli();
+   }
+ }
+diff --git a/apps/server/src/cloud/publicConfig.ts b/apps/server/src/cloud/publicConfig.ts
+index 85ffbbb..b8358b6 100644
+--- a/apps/server/src/cloud/publicConfig.ts
++++ b/apps/server/src/cloud/publicConfig.ts
+@@ -218,8 +218,4 @@ export function makeCloudCliOAuthConfig({
+ 
+ export const cloudCliOAuthConfig = makeCloudCliOAuthConfig();
+ 
+-export const hasCloudPublicConfig = Boolean(
+-  (normalizeSecureRelayUrl(process.env.T3CODE_RELAY_URL ?? "") ?? buildTimeRelayUrl) &&
+-  (process.env.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() || buildTimeClerkPublishableKey) &&
+-  (process.env.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID?.trim() || buildTimeClerkCliOAuthClientId),
+-);
++export const hasCloudPublicConfig = false;
+diff --git a/apps/server/src/engineCli.ts b/apps/server/src/engineCli.ts
+new file mode 100644
+index 0000000..67bbda1
+--- /dev/null
++++ b/apps/server/src/engineCli.ts
+@@ -0,0 +1,155 @@
++import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
++import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
++import * as NodeServices from "@effect/platform-node/NodeServices";
++import { DesktopBackendBootstrap } from "@t3tools/contracts";
++import { engineEnv, engineName, productName } from "@t3tools/contracts/engineBrand";
++import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
++import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
++import * as Config from "effect/Config";
++import * as Effect from "effect/Effect";
++import * as Layer from "effect/Layer";
++import * as Option from "effect/Option";
++import * as Schema from "effect/Schema";
++import { Command, Flag, GlobalFlag } from "effect/cli";
++import { UserError } from "effect/cli/CliError";
++
++import packageJson from "../package.json" with { type: "json" };
++import { readBootstrapEnvelope } from "./bootstrap.ts";
++import { claudeHistoryCommand } from "./cli/claudeHistory.ts";
++import * as ServerConfig from "./config.ts";
++import { awaitLauncherLoss } from "./launcherWatch.ts";
++import { resolveBaseDir } from "./os-jank.ts";
++import * as DatabaseMaintenance from "./persistence/DatabaseMaintenance.ts";
++
++const loopback = "127.0.0.1";
++const Port = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 65535 }));
++const BootstrapFd = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
++const EngineBootstrap = DesktopBackendBootstrap.mapFields((fields) => ({
++  ...fields,
++  port: Port,
++}));
++
++const flags = {
++  baseDir: Flag.String("base-dir").pipe(
++    Flag.withDescription(`Data directory. Defaults to ~/Library/Application Support/${productName}/engine.`),
++    Flag.optional,
++  ),
++  port: Flag.Int("port").pipe(
++    Flag.withSchema(Port),
++    Flag.withDescription("Loopback HTTP/WebSocket port. Use 0 (the default) for an OS-assigned port."),
++    Flag.optional,
++  ),
++  bootstrapFd: Flag.Int("bootstrap-fd").pipe(
++    Flag.withSchema(BootstrapFd),
++    Flag.withDescription("Read the native auth bootstrap envelope from an inherited descriptor."),
++    Flag.optional,
++  ),
++};
++
++const requiredBootstrap = (fd: number) =>
++  readBootstrapEnvelope(EngineBootstrap, fd).pipe(
++    // Schema errors may contain the original envelope. Keep credentials out of CLI logs.
++    Effect.option,
++    Effect.flatMap((read) => {
++      const envelope = Option.flatten(read);
++      return Option.isSome(envelope) && envelope.value.desktopBootstrapToken.trim().length >= 32
++        ? Effect.succeed(envelope.value)
++        : Effect.fail(new UserError({ userMessage: `Invalid or missing bootstrap envelope on fd ${fd}.` }));
++    }),
++  );
++
++function ignoreClosedLauncherPipe(error: NodeJS.ErrnoException): void {
++  if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") throw error;
++}
++
++const launch = Effect.fn("engine.launch")(function* (input: {
++  readonly baseDir: Option.Option<string>;
++  readonly port: Option.Option<number>;
++  readonly bootstrapFd: Option.Option<number>;
++}) {
++  const env = yield* Config.all({
++    baseDir: Config.String(engineEnv("HOME")).pipe(Config.option),
++    port: Config.schema(Port, engineEnv("PORT")).pipe(Config.option),
++    fd: Config.schema(BootstrapFd, engineEnv("BOOTSTRAP_FD")).pipe(Config.option),
++    logLevel: Config.LogLevel(engineEnv("LOG_LEVEL")).pipe(Config.withDefault("Info")),
++  });
++  const fd = Option.getOrUndefined(Option.orElse(input.bootstrapFd, () => env.fd));
++  if (fd === undefined) {
++    return yield* new UserError({ userMessage: "An inherited --bootstrap-fd is required to launch the engine." });
++  }
++  const bootstrap = yield* requiredBootstrap(fd);
++  const port = Option.getOrElse(Option.orElse(input.port, () => env.port), () => bootstrap.port);
++  const baseDir = yield* resolveBaseDir(
++    Option.getOrElse(Option.orElse(input.baseDir, () => env.baseDir), () => bootstrap.t3Home),
++  );
++  process.umask(0o077);
++  const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
++  yield* ServerConfig.ensureServerDirectories(derivedPaths);
++  const cliLogLevel = yield* GlobalFlag.LogLevel;
++  const config = ServerConfig.make({
++    ...derivedPaths,
++    logLevel: Option.getOrElse(cliLogLevel, () => env.logLevel),
++    traceMinLevel: "Info",
++    traceTimingEnabled: true,
++    traceBatchWindowMs: 1_000,
++    traceMaxBytes: 10 * 1024 * 1024,
++    traceMaxFiles: 10,
++    otlpTracesUrl: undefined,
++    otlpMetricsUrl: undefined,
++    otlpLogsUrl: undefined,
++    otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
++    otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
++    otlpLogsExport: DEFAULT_SIGNAL_EXPORT,
++    otelEnvironment: OtelEnvironment.none,
++    mode: "desktop",
++    port,
++    host: loopback,
++    cwd: process.cwd(),
++    baseDir,
++    staticDir: undefined,
++    devUrl: undefined,
++    devAllowedOrigins: [],
++    noBrowser: true,
++    startupPresentation: "headless",
++    desktopBootstrapToken: bootstrap.desktopBootstrapToken,
++    desktopBootstrapSecret: bootstrap.desktopBootstrapSecret,
++    shellEnvironmentPrepared: bootstrap.shellEnvironmentPrepared,
++    desktopTelemetryFd: undefined,
++    desktopTelemetryControlFd: undefined,
++    desktopBrowserFd: undefined,
++    desktopBrowserControlFd: undefined,
++    resourceMonitorPath: undefined,
++    autoBootstrapProjectFromCwd: false,
++    logWebSocketEvents: false,
++    tailscaleServeEnabled: false,
++    tailscaleServePort: 443,
++  });
++
++  process.stdout.on("error", ignoreClosedLauncherPipe);
++  process.stderr.on("error", ignoreClosedLauncherPipe);
++  const { runServer } = yield* Effect.promise(() => import("./server.ts"));
++  yield* Effect.raceFirst(
++    runServer.pipe(
++      Effect.provideService(ServerConfig.ServerConfig, config),
++      Effect.ensuring(
++        DatabaseMaintenance.runRequestedReclaim(config.dbPath).pipe(
++          Effect.provide(DatabaseMaintenance.layer),
++        ),
++      ),
++    ),
++    awaitLauncherLoss().pipe(Effect.andThen(Effect.interrupt)),
++  );
++});
++
++export function runEngineCli() {
++  const cli = Command.make(engineName, flags).pipe(
++    Command.withDescription(`Run the ${productName} loopback engine.`),
++    Command.withSubcommands([claudeHistoryCommand]),
++    Command.withHandler(launch),
++  );
++  Command.run(cli, { version: packageJson.version }).pipe(
++    Effect.scoped,
++    Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
++    NodeRuntime.runMain,
++  );
++}
+diff --git a/apps/server/src/os-jank.ts b/apps/server/src/os-jank.ts
+index dece291..d597bea 100644
+--- a/apps/server/src/os-jank.ts
++++ b/apps/server/src/os-jank.ts
+@@ -1,3 +1,6 @@
++import { lstatSync, readdirSync, realpathSync } from "node:fs";
++import { productName } from "@t3tools/contracts/engineBrand";
++import { UserError } from "effect/cli/CliError";
+ import * as HostProcess from "@t3tools/shared/HostProcess";
+ import {
+   listLoginShellCandidates,
+@@ -14,7 +17,7 @@ import * as NodeOS from "node:os";
+ 
+ function logPathHydrationWarning(message: string, error?: unknown): void {
+   process.stderr.write(
+-    `[server] ${message} ${error instanceof Error ? error.message : (error ?? "")}\n`,
++    `[${productName} engine] ${message} ${error instanceof Error ? error.message : (error ?? "")}\n`,
+   );
+ }
+ 
+@@ -120,10 +123,54 @@ export const expandHomePath = Effect.fn(function* (input: string) {
+   return input;
+ });
+ 
+-export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
+-  const { join, resolve } = yield* Path.Path;
+-  if (!raw || raw.trim().length === 0) {
+-    return join(yield* HostProcess.HomeDirectory, ".t3");
++// Resolve existing ancestors before creating anything, including a missing
++// data directory reached through a symlink.
++function canonicalStoragePath(path: string, paths: Path.Path["Service"]): string {
++  if (path.split(paths.sep).some((part) => part.toLowerCase() === ".t3")) {
++    throw new Error("The legacy T3 data directory is reserved.");
++  }
++  if (!lstatSync(path, { throwIfNoEntry: false })) {
++    return paths.join(canonicalStoragePath(paths.dirname(path), paths), paths.basename(path));
++  }
++  const canonical = realpathSync(path);
++  if (canonical.split(paths.sep).some((part) => part.toLowerCase() === ".t3")) {
++    throw new Error("The legacy T3 data directory is reserved.");
+   }
+-  return resolve(yield* expandHomePath(raw.trim()));
++  return canonical;
++}
++
++export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
++  const paths = yield* Path.Path;
++  const home = yield* HostProcess.HomeDirectory;
++  const proposed = raw?.trim()
++    ? paths.resolve(yield* expandHomePath(raw.trim()))
++    : paths.join(home, "Library", "Application Support", productName, "engine");
++  return yield* Effect.try({
++    try: () => {
++      const baseDir = canonicalStoragePath(proposed, paths);
++      // State and cache locations are owned by the engine. Reject linked
++      // directories and top-level state files before opening the database.
++      const ownedLocations = [
++        "userdata", "userdata/secrets", "userdata/logs", "userdata/attachments",
++        "userdata/themes", "caches", "worktrees", "runtime",
++      ];
++      for (const location of ownedLocations) {
++        const directory = paths.join(baseDir, location);
++        if (lstatSync(directory, { throwIfNoEntry: false })?.isSymbolicLink()) {
++          throw new Error("Engine storage directories must not be symlinks.");
++        }
++      }
++      for (const location of ["userdata", "userdata/secrets"]) {
++        const directory = paths.join(baseDir, location);
++        if (!lstatSync(directory, { throwIfNoEntry: false })) continue;
++        for (const entry of readdirSync(directory, { withFileTypes: true })) {
++          if (entry.isSymbolicLink()) {
++            throw new Error("Engine state files must not be symlinks.");
++          }
++        }
++      }
++      return baseDir;
++    },
++    catch: (error) => new UserError({ userMessage: `Invalid engine data directory: ${error instanceof Error ? error.message : String(error)}` }),
++  });
+ });
+diff --git a/apps/server/src/policy/ManagedPolicy.ts b/apps/server/src/policy/ManagedPolicy.ts
+index 0165105..a5a3438 100644
+--- a/apps/server/src/policy/ManagedPolicy.ts
++++ b/apps/server/src/policy/ManagedPolicy.ts
+@@ -4,7 +4,7 @@
+  *
+  * @module ManagedPolicy
+  */
+-import * as NodeModule from "node:module";
++import { engineNativeRequire } from "@t3tools/shared/engineNative";
+ 
+ import { ManagedPolicyDocument, type ManagedPolicySummary } from "@t3tools/contracts";
+ import * as Config from "effect/Config";
+@@ -206,7 +206,7 @@ const make = Effect.gen(function* () {
+ });
+ 
+ // A single-executable server resolves packages on disk only through `require`.
+-const requireForFfi = NodeModule.createRequire(import.meta.url);
++const requireForFfi = engineNativeRequire();
+ 
+ export const layer = Layer.effect(ManagedPolicy, make).pipe(
+   Layer.provide(
+diff --git a/apps/server/src/policy/managedLimits.ts b/apps/server/src/policy/managedLimits.ts
+index 88df7d6..ab76e83 100644
+--- a/apps/server/src/policy/managedLimits.ts
++++ b/apps/server/src/policy/managedLimits.ts
+@@ -73,8 +73,7 @@ export const allowsRemoteClients = (policy: PolicyDocument) =>
+   allowsAuthPolicy(policy, "remote-reachable");
+ 
+ /** T3 Connect is a way for remote clients in, so a policy without `remote` turns it off too. */
+-export const allowsConnect = (policy: PolicyDocument) =>
+-  policy.document?.limits?.connect !== false && allowsRemoteClients(policy);
++export const allowsConnect = (_policy: PolicyDocument) => false;
+ 
+ const refuse = (policy: PolicyDocument, action: string, detail?: string) =>
+   new ManagedPolicyRefusedError({
+diff --git a/apps/server/src/preview/PreviewBrowser.ts b/apps/server/src/preview/PreviewBrowser.ts
+index 50ba7b9..dffaf51 100644
+--- a/apps/server/src/preview/PreviewBrowser.ts
++++ b/apps/server/src/preview/PreviewBrowser.ts
+@@ -441,7 +441,11 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
+ export const layer = Layer.effect(
+   PreviewBrowser,
+   Effect.gen(function* () {
+-    const config = yield* ServerConfig.ServerConfig;
+-    return yield* makePreviewBrowser({ baseDir: config.baseDir });
++    const platform = yield* HostProcess.Platform;
++    const arch = yield* HostProcess.Architecture;
++    return PreviewBrowser.of({
++      executable: Effect.fail(new PreviewBrowserUnsupportedError({ platform, arch })),
++      installed: Effect.succeedNone,
++    });
+   }),
+ );
+diff --git a/apps/server/src/preview/ServerBrowserContexts.ts b/apps/server/src/preview/ServerBrowserContexts.ts
+index 365add7..29b4b4a 100644
+--- a/apps/server/src/preview/ServerBrowserContexts.ts
++++ b/apps/server/src/preview/ServerBrowserContexts.ts
+@@ -2,17 +2,15 @@
+ import { INCOGNITO_BROWSER_PROFILE_ID } from "@t3tools/contracts";
+ import { constVoid } from "effect/Function";
+ import * as NodeFSP from "node:fs/promises";
+-import * as NodeModule from "node:module";
+ import * as NodeOS from "node:os";
+ import * as NodePath from "node:path";
+ import type { Browser, BrowserContext, CDPSession } from "playwright-core";
+ 
+ import { sandboxDisabled } from "./PreviewBrowserHost.ts";
+ 
+-// Playwright needs its files on disk. createRequire also resolves it from a Node SEA executable.
+-const requirePlaywright = NodeModule.createRequire(import.meta.url);
+-const loadPlaywright = () =>
+-  requirePlaywright("playwright-core") as typeof import("playwright-core");
++const loadPlaywright = (): typeof import("playwright-core") => {
++  throw new Error("Browser previews are unavailable in this engine.");
++};
+ 
+ interface Options {
+   readonly profilesDir: string;
+diff --git a/apps/server/src/process/externalLauncher.ts b/apps/server/src/process/externalLauncher.ts
+index b900823..f7c440d 100644
+--- a/apps/server/src/process/externalLauncher.ts
++++ b/apps/server/src/process/externalLauncher.ts
+@@ -740,17 +740,12 @@ const launchAndUnref = Effect.fn("externalLauncher.launchAndUnref")(function* (
+ const launchBrowser = Effect.fn("externalLauncher.launchBrowser")(function* (
+   target: string,
+ ): Effect.fn.Return<void, ExternalLauncherError, ChildProcessSpawner.ChildProcessSpawner> {
+-  const launch = yield* resolveBrowserLaunch(target);
+-  return yield* launchAndUnref(
+-    launch,
+-    (cause) =>
+-      new ExternalLauncherBrowserSpawnError({
+-        target,
+-        command: launch.command,
+-        args: launch.args,
+-        cause,
+-      }),
+-  );
++  return yield* new ExternalLauncherBrowserSpawnError({
++    target,
++    command: "",
++    args: [],
++    cause: "Browser opening is unavailable in this engine.",
++  });
+ });
+ 
+ const launchEditorProcess = Effect.fn("externalLauncher.launchEditorProcess")(function* (
+diff --git a/apps/server/src/server.ts b/apps/server/src/server.ts
+index 47190f6..1505877 100644
+--- a/apps/server/src/server.ts
++++ b/apps/server/src/server.ts
+@@ -348,7 +348,6 @@ const layerHttpServer = Layer.unwrap(
+       tailscaleServeEnabled: config.tailscaleServeEnabled,
+       privateNetworkOnly: config.privateNetworkOnly,
+     });
+-    yield* ManagedLimits.closeTailscaleServeTo(policy, { host: bindHost, port: config.port });
+     return NodeHttpServer.layer(
+       () => {
+         const server = rejectRequestsUntilServing(
+@@ -762,7 +761,7 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
+   Layer.provideMerge(TraceDiagnostics.layer),
+   Layer.provideMerge(TriageService.layer.pipe(Layer.provide(GitVcsDriver.layer))),
+   // Layers memoize by reference, so this is the same policy the settings layer reads.
+-  Layer.provideMerge(AnalyticsService.layer.pipe(Layer.provide(ManagedPolicy.layer))),
++  Layer.provideMerge(AnalyticsService.layerDisabled),
+   Layer.provideMerge(ExternalLauncher.layer),
+   Layer.provideMerge(RemoteOpenTargets.layer),
+   Layer.provideMerge(DirectEndpoints.layer),
+@@ -797,8 +796,6 @@ const layerMakeRoutes = Layer.mergeAll(
+     ServerHttp.layerAttachmentUploadRoute,
+     GuestHttp.layer,
+     DeviceHubProxy.layer,
+-    ServerBrowserStream.routeLayer,
+-    ServerHttp.layerStaticAndDevRoute,
+     Ws.layer,
+     speechStreamRouteLayer,
+   ),
+diff --git a/apps/server/src/serverOwnership.ts b/apps/server/src/serverOwnership.ts
+index 565f811..6db5cab 100644
+--- a/apps/server/src/serverOwnership.ts
++++ b/apps/server/src/serverOwnership.ts
+@@ -13,20 +13,6 @@ import * as Option from "effect/Option";
+ import * as Runtime from "effect/Runtime";
+ import * as Schema from "effect/Schema";
+ 
+-import {
+-  BOOT_SERVICE_LAUNCHD_LABEL,
+-  BOOT_SERVICE_PLIST_FILE,
+-  BOOT_SERVICE_UNIT_FILE,
+-  bootServiceBaseDirOf,
+-} from "./cloud/bootService.ts";
+-import { ServiceLauncherHostProcess } from "./cloud/serviceLauncherClient.ts";
+-import {
+-  SERVICE_LAUNCHER_CONTEXT_ENV,
+-  SERVICE_RESTART_PENDING_FILE,
+-  SERVICE_STATE_FILE,
+-  compareExactServiceVersions,
+-  serviceStateActiveVersion,
+-} from "./cloud/serviceProtocol.ts";
+ import * as ProcessRunner from "./processRunner.ts";
+ import {
+   clearPersistedServerRuntimeState,
+@@ -48,17 +34,6 @@ export class ServerAlreadyRunningError extends Schema.TaggedError<ServerAlreadyR
+   }
+ }
+ 
+-export class OlderBootServiceError extends Schema.TaggedError<OlderBootServiceError>()(
+-  "OlderBootServiceError",
+-  { baseDir: Schema.String },
+-) {
+-  override readonly [Runtime.errorExitCode] = SERVER_EXIT_CODE_STATE_DIR_OWNED;
+-
+-  override get message(): string {
+-    return `A T3 Code background service set up for ${this.baseDir} may still run a release without the ownership lock. On that machine, try \`t3 update\` and let it restart (or run \`t3 service restart\` if the update is already installed). If the older launcher cannot update, run \`t3 service uninstall\`, then reinstall with \`t3 service install\` from a current CLI. You can also leave the service uninstalled. Pass \`--base-dir ${this.baseDir}\` to each command, and use \`npx t3@latest\` if \`t3\` is not installed or is outdated. Then retry. No server was stopped.`;
+-  }
+-}
+-
+ export class ServerOwnershipError extends Schema.TaggedError<ServerOwnershipError>()(
+   "ServerOwnershipError",
+   { stateDir: Schema.String, cause: Schema.Defect() },
+@@ -105,74 +80,7 @@ const legacyOwnerIsLive = Effect.fn("legacyOwnerIsLive")(function* (
+   return !Number.isFinite(startedAt) || startedAt <= recordedAt + 1_000;
+ });
+ 
+-// Pre-lock services become invisible when another server replaces their runtime
+-// record. Unreadable configuration or an unavailable manager allows startup.
+-const olderBootServiceHome = Effect.fn("olderBootServiceHome")(
+-  function* (stateDir: string) {
+-    if (
+-      (yield* ServiceLauncherHostProcess).connected &&
+-      (yield* HostProcess.Environment)[SERVICE_LAUNCHER_CONTEXT_ENV] !== undefined
+-    ) {
+-      return undefined;
+-    }
+-    const platform = yield* HostProcess.Platform;
+-    const uid = yield* HostProcess.UserId;
+-    if (platform !== "linux" && (platform !== "darwin" || uid === undefined)) return undefined;
+ 
+-    const homeDir = yield* HostProcess.HomeDirectory;
+-    const fs = yield* FileSystem.FileSystem;
+-    const runner = yield* ProcessRunner.ProcessRunner;
+-    const unitPath =
+-      platform === "darwin"
+-        ? NodePath.join(homeDir, "Library", "LaunchAgents", BOOT_SERVICE_PLIST_FILE)
+-        : NodePath.join(homeDir, ".config", "systemd", "user", BOOT_SERVICE_UNIT_FILE);
+-    const baseDir = bootServiceBaseDirOf(yield* fs.readFileString(unitPath));
+-    if (
+-      baseDir === undefined ||
+-      (yield* fs.realPath(NodePath.join(baseDir, "userdata"))) !== (yield* fs.realPath(stateDir))
+-    ) {
+-      return undefined;
+-    }
+-    const runtimeDir = NodePath.join(baseDir, "runtime");
+-    const version = serviceStateActiveVersion(
+-      yield* fs.readFileString(NodePath.join(runtimeDir, SERVICE_STATE_FILE)),
+-    );
+-    if (version === undefined) return undefined;
+-    const run = (command: string, args: ReadonlyArray<string>) =>
+-      runner.run({ command, args, timeout: Duration.seconds(5), maxOutputBytes: 65_536 });
+-    let loaded: boolean;
+-    if (platform === "darwin") {
+-      loaded =
+-        (yield* run("launchctl", ["print", `gui/${uid}/${BOOT_SERVICE_LAUNCHD_LABEL}`])).code === 0;
+-      if (!loaded) {
+-        const disabled = yield* run("launchctl", ["print-disabled", `gui/${uid}`]);
+-        // Older macOS versions print `true` instead of `disabled`.
+-        if (
+-          disabled.code !== 0 ||
+-          disabled.stdout.includes(`"${BOOT_SERVICE_LAUNCHD_LABEL}" => disabled`) ||
+-          disabled.stdout.includes(`"${BOOT_SERVICE_LAUNCHD_LABEL}" => true`)
+-        )
+-          return undefined;
+-      }
+-    } else {
+-      const active = yield* run("systemctl", ["--user", "is-active", BOOT_SERVICE_UNIT_FILE]);
+-      // A unit waiting out its Restart= delay is activating, with exit code 3.
+-      loaded = active.code === 0 || (active.code === 3 && active.stdout.trim() === "activating");
+-      if (!loaded) {
+-        const enabled = yield* run("systemctl", ["--user", "is-enabled", BOOT_SERVICE_UNIT_FILE]);
+-        if (enabled.code !== 0 || enabled.stdout.trim() !== "enabled") return undefined;
+-      }
+-    }
+-    // A deferred update names the staged runtime, not the loaded service's runtime.
+-    if (loaded && (yield* fs.exists(NodePath.join(runtimeDir, SERVICE_RESTART_PENDING_FILE)))) {
+-      return baseDir;
+-    }
+-    // Stable 0.1.0 shipped the ownership lock. Earlier lock-aware prereleases
+-    // are conservatively refused because older runtimes expose no capability marker.
+-    return compareExactServiceVersions(version, "0.1.0") < 0 ? baseDir : undefined;
+-  },
+-  Effect.orElseSucceed(() => undefined),
+-);
+ 
+ /**
+  * Hold an exclusive lock on the state directory until the scope closes. The
+@@ -239,11 +147,6 @@ export const acquireServerOwnership = Effect.fn("acquireServerOwnership")(functi
+   ) {
+     return yield* new ServerAlreadyRunningError({ stateDir });
+   }
+-  const olderServiceHome = yield* olderBootServiceHome(stateDir);
+-  if (olderServiceHome !== undefined) {
+-    return yield* new OlderBootServiceError({ baseDir: olderServiceHome });
+-  }
+-
+   yield* Effect.gen(function* () {
+     let lost = lock.replacedDuringAcquire;
+     let statWarningLogged = false;
+diff --git a/apps/server/src/serverRuntimeStartup.ts b/apps/server/src/serverRuntimeStartup.ts
+index 26f91f5..6e60042 100644
+--- a/apps/server/src/serverRuntimeStartup.ts
++++ b/apps/server/src/serverRuntimeStartup.ts
+@@ -615,21 +615,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
+           }),
+           Effect.ignoreCause({ log: true }),
+         );
+-        if (serverConfig.startupPresentation === "headless") {
+-          yield* Effect.logDebug("startup phase: headless access info");
+-          const accessInfo = yield* issueHeadlessServeAccessInfo();
+-          yield* runStartupPhase(
+-            "headless.output",
+-            Console.log(formatHeadlessServeOutput(accessInfo)),
+-          );
+-        } else {
+-          yield* Effect.logDebug("startup phase: browser open check");
+-          const startupBrowserTarget = yield* resolveStartupBrowserTarget;
+-          if (serverConfig.mode !== "desktop") {
+-            yield* announceStartupPairingUrl(startupBrowserTarget);
+-          }
+-          yield* runStartupPhase("browser.open", maybeOpenBrowser(startupBrowserTarget));
+-        }
++
+       }),
+     );
+ 
+diff --git a/apps/server/src/speech/native.ts b/apps/server/src/speech/native.ts
+index 8331e1b..f08a42e 100644
+--- a/apps/server/src/speech/native.ts
++++ b/apps/server/src/speech/native.ts
+@@ -1,6 +1,5 @@
+ // @effect-diagnostics nodeBuiltinImport:off globalTimers:off - native inference and IPC cleanup need killable Promise boundaries outside the Effect runtime.
+ import * as NodeChildProcess from "node:child_process";
+-import * as NodeSea from "node:sea";
+ import type { SpeechStreamText } from "@t3tools/contracts";
+ import { createSpeechAudio } from "./audio.ts";
+ 
+@@ -244,57 +243,8 @@ export async function runNativeSpeechWorker(mode: "discover" | "model", moduleUr
+   await run(import.meta.url, moduleUrl);
+ }
+ 
+-function speechWorkerArgs(mode: "discover" | "model", moduleUrl?: string) {
+-  if (NodeSea.isSea()) return ["__speech-worker", mode, ...(moduleUrl ? [moduleUrl] : [])];
+-  // Normal Node and Electron hosts can evaluate the same entry without a sibling artifact.
+-  const loader = `const baseUrl = ${JSON.stringify(import.meta.url)};
+-    const moduleUrl = process.argv[1];${loaderEntry}`;
+-  return [
+-    "--input-type=module",
+-    "-e",
+-    loader + (mode === "discover" ? discoveryEntry : entry),
+-    ...(moduleUrl ? [moduleUrl] : []),
+-  ];
+-}
+-
+-export async function listNativeSpeechGpuDevices(moduleUrl?: string) {
+-  const child = NodeChildProcess.spawn(process.execPath, speechWorkerArgs("discover", moduleUrl), {
+-    stdio: ["ignore", "ignore", "inherit", "ipc"],
+-    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+-  });
+-  return await new Promise<{ id: string; name: string }[]>((resolve, reject) => {
+-    const timer = setTimeout(() => {
+-      child.kill();
+-      reject(new Error("Speech device discovery timed out."));
+-    }, 10_000);
+-    child.on("message", (devices: unknown) => {
+-      if (
+-        Array.isArray(devices) &&
+-        devices.every(
+-          (device: unknown) =>
+-            typeof device === "object" &&
+-            device !== null &&
+-            "id" in device &&
+-            typeof device.id === "string" &&
+-            "name" in device &&
+-            typeof device.name === "string",
+-        )
+-      ) {
+-        clearTimeout(timer);
+-        resolve(devices);
+-        child.kill();
+-      }
+-    });
+-    child.once("error", (error) => {
+-      clearTimeout(timer);
+-      child.kill();
+-      reject(error);
+-    });
+-    child.once("exit", (code) => {
+-      clearTimeout(timer);
+-      reject(new Error(`Speech device discovery exited (${code}).`));
+-    });
+-  });
++export async function listNativeSpeechGpuDevices(_moduleUrl?: string) {
++  return [];
+ }
+ 
+ /** Loads a model in an isolated process. "auto" retries on the CPU when GPU setup fails. */
+@@ -304,12 +254,7 @@ export async function loadNativeSpeechModel(
+   moduleUrl?: string,
+   acceleration = "auto",
+ ) {
+-  try {
+-    return await loadNativeSpeechModelOnce(path, signal, moduleUrl, acceleration);
+-  } catch (error) {
+-    if (acceleration !== "auto" || signal.aborted) throw error;
+-    return await loadNativeSpeechModelOnce(path, signal, moduleUrl, "cpu");
+-  }
++  throw new Error("Native audio transcription is unavailable in this engine.");
+ }
+ 
+ async function loadNativeSpeechModelOnce(
+diff --git a/apps/server/src/telemetry/AnalyticsService.ts b/apps/server/src/telemetry/AnalyticsService.ts
+index 384da92..a8096c8 100644
+--- a/apps/server/src/telemetry/AnalyticsService.ts
++++ b/apps/server/src/telemetry/AnalyticsService.ts
+@@ -362,3 +362,9 @@ export const make = Effect.gen(function* () {
+ });
+ 
+ export const layer = Layer.effect(AnalyticsService, make);
++
++export const layerDisabled = Layer.succeed(AnalyticsService, AnalyticsService.of({
++  record: () => Effect.void,
++  recordOwners: () => Effect.void,
++  flush: Effect.void,
++}));
+diff --git a/apps/server/src/terminal/NodePtyAdapter.ts b/apps/server/src/terminal/NodePtyAdapter.ts
+index cc7ae63..7423ad5 100644
+--- a/apps/server/src/terminal/NodePtyAdapter.ts
++++ b/apps/server/src/terminal/NodePtyAdapter.ts
+@@ -1,4 +1,4 @@
+-import * as NodeModule from "node:module";
++import { engineNativeRequire } from "@t3tools/shared/engineNative";
+ import * as NodeNet from "node:net";
+ 
+ import * as Context from "effect/Context";
+@@ -36,7 +36,7 @@ class NodePtyCancelError extends Schema.TaggedError<NodePtyCancelError>()("NodeP
+ type NodePtyModuleLoader = () => Promise<typeof import("node-pty")>;
+ 
+ // node-pty's native addon stays external; single-executables need require to resolve disk modules and spawn helpers.
+-const requireForNodePty = NodeModule.createRequire(import.meta.url);
++const requireForNodePty = engineNativeRequire();
+ 
+ const loadNodePty: NodePtyModuleLoader = () =>
+   Promise.resolve().then(() => requireForNodePty("node-pty") as typeof import("node-pty"));
+diff --git a/apps/server/src/vcs/CheckoutCloner.ts b/apps/server/src/vcs/CheckoutCloner.ts
+index 9938cc6..70d51a1 100644
+--- a/apps/server/src/vcs/CheckoutCloner.ts
++++ b/apps/server/src/vcs/CheckoutCloner.ts
+@@ -1,4 +1,4 @@
+-import * as NodeModule from "node:module";
++import { engineNativeRequire } from "@t3tools/shared/engineNative";
+ 
+ import * as HostProcess from "@t3tools/shared/HostProcess";
+ import * as Context from "effect/Context";
+@@ -29,7 +29,7 @@ export const CheckoutCloner = Context.Reference<
+ >("t3/vcs/CheckoutCloner", { defaultValue: () => undefined });
+ 
+ // A single-executable server resolves packages on disk only through `require`.
+-const requireForFfi = NodeModule.createRequire(import.meta.url);
++const requireForFfi = engineNativeRequire();
+ 
+ /** macOS `clonefile(2)`, which clones a folder hierarchy in the kernel; elsewhere nothing. */
+ export const layer = Layer.effect(
+diff --git a/apps/server/src/workspace/WorkspaceSearchIndex.ts b/apps/server/src/workspace/WorkspaceSearchIndex.ts
+index ecb8c6b..eec4049 100644
+--- a/apps/server/src/workspace/WorkspaceSearchIndex.ts
++++ b/apps/server/src/workspace/WorkspaceSearchIndex.ts
+@@ -1,4 +1,4 @@
+-import * as NodeModule from "node:module";
++import { engineNativeRequire } from "@t3tools/shared/engineNative";
+ 
+ import type {
+   DirItem,
+@@ -28,7 +28,7 @@ import type {
+ import { isProjectFaviconPath } from "@t3tools/shared/projectFavicon";
+ 
+ // fff-node's native library stays external; single-executables require disk packages instead of importing them.
+-const requireForFff = NodeModule.createRequire(import.meta.url);
++const requireForFff = engineNativeRequire();
+ const { FileFinder } = requireForFff("@ff-labs/fff-node") as typeof import("@ff-labs/fff-node");
+ 
+ const WORKSPACE_INDEX_MAX_ENTRIES = 25_000;
+diff --git a/package.json b/package.json
+index 297327d..85509d9 100644
+--- a/package.json
++++ b/package.json
+@@ -20,6 +20,7 @@
+     "@ff-labs/fff-node@0.11.0": "dependency-patches/@ff-labs__fff-node@0.11.0.patch",
+     "@muse-code/sdk@1.4.6": "dependency-patches/@muse-code__sdk@1.4.6.patch",
+     "micromark-extension-gfm-table@2.1.1": "dependency-patches/micromark-extension-gfm-table@2.1.1.patch",
+-    "node-pty@1.2.0-beta.15": "dependency-patches/node-pty@1.2.0-beta.15.patch"
++    "node-pty@1.2.0-beta.15": "dependency-patches/node-pty@1.2.0-beta.15.patch",
++    "@effect/platform-node-shared@4.1.2": "local-dependency-patches/@effect+platform-node-shared@4.1.2.patch"
+   }
+ }
+diff --git a/packages/contracts/package.json b/packages/contracts/package.json
+index c9c7d5a..13f3c1f 100644
+--- a/packages/contracts/package.json
++++ b/packages/contracts/package.json
+@@ -18,6 +18,10 @@
+     "./relay": {
+       "types": "./src/relay.ts",
+       "import": "./src/relay.ts"
++    },
++    "./engineBrand": {
++      "types": "./src/engineBrand.ts",
++      "import": "./src/engineBrand.ts"
+     }
+   },
+   "dependencies": {
+diff --git a/packages/contracts/src/engineBrand.ts b/packages/contracts/src/engineBrand.ts
+new file mode 100644
+index 0000000..7243972
+--- /dev/null
++++ b/packages/contracts/src/engineBrand.ts
+@@ -0,0 +1,5 @@
++// Product identity. Protocol names and provider-specific identifiers remain stable.
++export const productName = "Notchpilot";
++export const engineName = `${productName.toLowerCase()}-engine`;
++export const engineEnv = (key: string) => `${productName.toUpperCase()}_ENGINE_${key}`;
++export const engineUserAgent = `${productName}-Engine`;
+diff --git a/packages/provider-cursor/src/server/sdk.ts b/packages/provider-cursor/src/server/sdk.ts
+index 85d719b..9a2567a 100644
+--- a/packages/provider-cursor/src/server/sdk.ts
++++ b/packages/provider-cursor/src/server/sdk.ts
+@@ -1,8 +1,8 @@
+ // @effect-diagnostics nodeBuiltinImport:off -- The SDK must load from disk beside its Webpack chunks.
+-import * as NodeModule from "node:module";
++import { engineNativeRequire } from "@t3tools/shared/engineNative";
+ 
+ // createRequire preserves adjacent Webpack chunks and native modules in bundled/SEA builds.
+-const requireCursorSdk = NodeModule.createRequire(import.meta.url);
++const requireCursorSdk = engineNativeRequire();
+ let sdk: typeof import("@cursor/sdk") | undefined;
+ let sqlite: typeof import("@cursor/sdk/sqlite") | undefined;
+ 
+diff --git a/packages/shared/package.json b/packages/shared/package.json
+index a287020..5774c24 100644
+--- a/packages/shared/package.json
++++ b/packages/shared/package.json
+@@ -542,6 +542,10 @@
+     "./speech": {
+       "types": "./src/speech.ts",
+       "import": "./src/speech.ts"
++    },
++    "./engineNative": {
++      "types": "./src/engineNative.ts",
++      "import": "./src/engineNative.ts"
+     }
+   },
+   "dependencies": {
+diff --git a/packages/shared/src/HostProcess.ts b/packages/shared/src/HostProcess.ts
+index e5e2f8e..80cbd79 100644
+--- a/packages/shared/src/HostProcess.ts
++++ b/packages/shared/src/HostProcess.ts
+@@ -3,7 +3,6 @@ import * as Effect from "effect/Effect";
+ import * as Schema from "effect/Schema";
+ import * as NodeDns from "node:dns";
+ import * as NodeOS from "node:os";
+-import * as NodeSea from "node:sea";
+ 
+ export const Platform = Context.Reference<NodeJS.Platform>("@t3tools/shared/HostProcess/Platform", {
+   defaultValue: () => process.platform,
+@@ -87,7 +86,7 @@ export const InvokedAs = Context.Reference<string>("@t3tools/shared/HostProcess/
+ });
+ 
+ export const IsExecutable = Context.Reference<boolean>("@t3tools/shared/HostProcess/IsExecutable", {
+-  defaultValue: () => NodeSea.isSea(),
++  defaultValue: () => import.meta.url.includes("/$bunfs/"),
+ });
+ 
+ export class HostnameLookupError extends Schema.TaggedError<HostnameLookupError>()(
+diff --git a/packages/shared/src/engineNative.ts b/packages/shared/src/engineNative.ts
+new file mode 100644
+index 0000000..7240e68
+--- /dev/null
++++ b/packages/shared/src/engineNative.ts
+@@ -0,0 +1,10 @@
++import { createRequire } from "node:module";
++import { join } from "node:path";
++
++let runtimeRequire: NodeJS.Require | undefined;
++
++export function setEngineNativeDirectory(directory: string): void {
++  runtimeRequire = createRequire(join(directory, "engine-native.cjs"));
++}
++
++export const engineNativeRequire = () => runtimeRequire ?? createRequire(import.meta.url);

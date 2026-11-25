@@ -1,0 +1,33 @@
+{
+  "originHash" : "e517dcce75f24c5fbc474b2b155353b28994304da1ccdb0d0d59b17599315cb9",
+  "pins" : [
+    {
+      "identity" : "fluidaudio",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/FluidInference/FluidAudio",
+      "state" : {
+        "revision" : "e0c6103bc87a88d25276cad491c86e757f58c865",
+        "version" : "0.18.4"
+      }
+    },
+    {
+      "identity" : "keyboardshortcuts",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sindresorhus/KeyboardShortcuts",
+      "state" : {
+        "revision" : "772133d9dbe800fdac0473226822994c5c162c58",
+        "version" : "3.1.0"
+      }
+    },
+    {
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle",
+      "state" : {
+        "revision" : "ab7d71291238df6e0492143b120c9b696a35f603",
+        "version" : "2.10.1"
+      }
+    }
+  ],
+  "version" : 3
+}

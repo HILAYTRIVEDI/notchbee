@@ -1,0 +1,630 @@
+diff --git a/apps/server/package.json b/apps/server/package.json
+index 5a86cc8..791b5df 100644
+--- a/apps/server/package.json
++++ b/apps/server/package.json
+@@ -8,9 +8,10 @@
+     "directory": "apps/server"
+   },
+   "type": "module",
++  "devDependencies": {
++    "@anthropic-ai/claude-agent-sdk": "0.3.330"
++  },
+   "dependencies": {
+-    "@anthropic-ai/claude-agent-sdk": "^0.3.321",
+-    "@cursor/sdk": "1.2.0",
+     "@effect/platform-node": "4.1.2",
+     "@effect/platform-node-shared": "4.1.2",
+     "@ff-labs/fff-node": "0.11.0",
+diff --git a/apps/server/src/auth/RpcAuthorization.ts b/apps/server/src/auth/RpcAuthorization.ts
+index 3c2629e..7c7efb2 100644
+--- a/apps/server/src/auth/RpcAuthorization.ts
++++ b/apps/server/src/auth/RpcAuthorization.ts
+@@ -79,6 +79,7 @@ export const RPC_REQUIRED_SCOPES = {
+   [WS_METHODS.providerAuthRemoveMethod]: AuthProvidersManageScope,
+   [WS_METHODS.providerAuthLogout]: AuthProvidersManageScope,
+   [WS_METHODS.providerAuthSubscribe]: AuthProvidersManageScope,
++  [WS_METHODS.providerSdkInstall]: AuthProvidersManageScope,
+   [WS_METHODS.providerInstallStart]: AuthProvidersManageScope,
+   [WS_METHODS.providerInstallCancel]: AuthProvidersManageScope,
+   [WS_METHODS.providerInstallSubscribe]: AuthOrchestrationReadScope,
+diff --git a/apps/server/src/claude-history-worker.ts b/apps/server/src/claude-history-worker.ts
+index 2aa7f97..d27b578 100644
+--- a/apps/server/src/claude-history-worker.ts
++++ b/apps/server/src/claude-history-worker.ts
+@@ -1,4 +1,7 @@
++import { configureProviderSdkDirectory } from "@t3tools/shared/providerSdk";
+ import { runClaudeHistoryWorker } from "./claudeHistoryWorker.ts";
+ 
+-const [method, sessionId, rawOptions] = process.argv.slice(2);
++const [baseDirectory, method, sessionId, rawOptions] = process.argv.slice(2);
++if (!baseDirectory) throw new Error("Provider SDK storage is required.");
++configureProviderSdkDirectory(baseDirectory);
+ await runClaudeHistoryWorker(method, sessionId, rawOptions);
+diff --git a/apps/server/src/claudeHistoryWorker.ts b/apps/server/src/claudeHistoryWorker.ts
+index f162986..f75aabd 100644
+--- a/apps/server/src/claudeHistoryWorker.ts
++++ b/apps/server/src/claudeHistoryWorker.ts
+@@ -1,4 +1,4 @@
+-import { forkSession, getSessionMessages } from "@anthropic-ai/claude-agent-sdk";
++import { loadClaudeSdk } from "./provider/ClaudeSdk.ts";
+ import * as Schema from "effect/Schema";
+ 
+ // Bundled import.meta.main is always true; imports must have no side effects.
+@@ -19,6 +19,7 @@ export async function runClaudeHistoryWorker(
+ ): Promise<void> {
+   const options = decodeHistoryOptions(rawOptions ?? "{}");
+   if (!sessionId) throw new Error("Claude history session id is required.");
++  const { forkSession, getSessionMessages } = loadClaudeSdk();
+   const result =
+     method === "getSessionMessages"
+       ? await getSessionMessages(sessionId, options)
+diff --git a/apps/server/src/cli/claudeHistory.ts b/apps/server/src/cli/claudeHistory.ts
+index d46540f..e0adbc0 100644
+--- a/apps/server/src/cli/claudeHistory.ts
++++ b/apps/server/src/cli/claudeHistory.ts
+@@ -1,16 +1,19 @@
++import { configureProviderSdkDirectory } from "@t3tools/shared/providerSdk";
+ import * as Effect from "effect/Effect";
+ import { Argument, Command } from "effect/cli";
+ 
+ /** Single-executable builds lack Node, so they use this subcommand instead of claudeHistoryWorker.mjs. */
+ export const claudeHistoryCommand = Command.make("__claude-history", {
++  baseDirectory: Argument.String("base-directory"),
+   method: Argument.String("method"),
+   sessionId: Argument.String("session-id"),
+   options: Argument.String("options").pipe(Argument.optional),
+ }).pipe(
+   Command.unlisted,
+-  Command.withHandler(({ method, sessionId, options }) =>
++  Command.withHandler(({ baseDirectory, method, sessionId, options }) => {
++    configureProviderSdkDirectory(baseDirectory);
+     // Two effects, so an interrupt during the import never starts the worker.
+-    Effect.promise(() => import("../claudeHistoryWorker.ts")).pipe(
++    return Effect.promise(() => import("../claudeHistoryWorker.ts")).pipe(
+       Effect.flatMap(({ runClaudeHistoryWorker }) =>
+         Effect.promise(() =>
+           runClaudeHistoryWorker(
+@@ -20,6 +23,6 @@ export const claudeHistoryCommand = Command.make("__claude-history", {
+           ),
+         ),
+       ),
+-    ),
+-  ),
++    );
++  }),
+ );
+diff --git a/apps/server/src/device/sshDeviceScript.ts b/apps/server/src/device/sshDeviceScript.ts
+index 2e3e895..eb1a17c 100644
+--- a/apps/server/src/device/sshDeviceScript.ts
++++ b/apps/server/src/device/sshDeviceScript.ts
+@@ -35,7 +35,7 @@ const path = require('node:path');
+ const os = require('node:os');
+ const net = require('node:net');
+ const { spawn, spawnSync } = require('node:child_process');
+-const root = path.join(os.homedir(), '.t3', 'device');
++const root = path.join(os.homedir(), '.notchbee', 'device');
+ const state = path.join(root, 'hosts', owner);
+ const run = (command, args, options = {}) => spawnSync(command, args, { encoding: 'utf8', timeout: 30000, ...options });
+ const read = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+diff --git a/apps/server/src/engineCli.ts b/apps/server/src/engineCli.ts
+index e33a87a..420eaf4 100644
+--- a/apps/server/src/engineCli.ts
++++ b/apps/server/src/engineCli.ts
+@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
+ import { DesktopBackendBootstrap } from "@t3tools/contracts";
+ import { engineEnv, engineName, productName } from "@t3tools/contracts/engineBrand";
+ import * as Config from "effect/Config";
++import { configureProviderSdkDirectory } from "@t3tools/shared/providerSdk";
+ import * as Effect from "effect/Effect";
+ import * as Layer from "effect/Layer";
+ import * as Option from "effect/Option";
+@@ -94,6 +95,7 @@ const launch = Effect.fn("engine.launch")(function* (input: {
+     Option.getOrElse(Option.orElse(input.baseDir, () => env.baseDir), () => bootstrap.t3Home),
+   );
+   process.umask(0o077);
++  configureProviderSdkDirectory(baseDir);
+   const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
+   yield* ServerConfig.ensureServerDirectories(derivedPaths);
+   const cliLogLevel = yield* GlobalFlag.LogLevel;
+diff --git a/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts b/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
+index 44e3870..9f8b8d6 100644
+--- a/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
++++ b/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
+@@ -1,3 +1,5 @@
++import { loadClaudeSdk } from "../../provider/ClaudeSdk.ts";
++import { providerSdkDirectory } from "@t3tools/shared/providerSdk";
+ import { productName } from "@t3tools/contracts/engineBrand";
+ import * as DocumentText from "../../provider/DocumentText.ts";
+ import {
+@@ -41,16 +43,11 @@ import {
+   type CanUseTool,
+   type ElicitationRequest,
+   type ElicitationResult,
+-  forkSession as forkClaudeSession,
+   type EffortLevel,
+   type ForkSessionOptions,
+   type ForkSessionResult,
+-  getSessionMessages,
+-  getSubagentMessages,
+   type HookCallback,
+   type McpServerStatus as ClaudeMcpServerStatus,
+-  query,
+-  resolveSettings as resolveClaudeSettings,
+   type Options as ClaudeQueryOptions,
+   type PermissionMode,
+   type PermissionResult,
+@@ -924,7 +921,7 @@ const runClaudeWorker = Effect.fn("runClaudeWorker")(function* (input: {
+     executablePath,
+     ChildProcess.make(
+       executablePath,
+-      [...workerArguments, input.method, input.sessionId, encodeClaudeJson(input.options ?? {})],
++      [...workerArguments, providerSdkDirectory(), input.method, input.sessionId, encodeClaudeJson(input.options ?? {})],
+       {
+         env: {
+           ...input.environment,
+@@ -1070,7 +1067,7 @@ export const layerQueryRunner: Layer.Layer<
+           const queryRuntime = yield* Effect.uninterruptibleMask((restore) =>
+             Effect.try({
+               try: () =>
+-                query({
++                loadClaudeSdk().query({
+                   prompt,
+                   options: { ...options, spawnClaudeCodeProcess },
+                 }),
+@@ -1272,7 +1269,7 @@ export const layerQueryRunner: Layer.Layer<
+           unknown
+         > = usesHostConfig
+           ? Effect.tryPromise({
+-              try: () => forkClaudeSession(input.sessionId, input.options),
++              try: () => loadClaudeSdk().forkSession(input.sessionId, input.options),
+               catch: (cause) => queryRunnerError(cause, "forkSession"),
+             })
+           : forkClaudeSessionInWorker(input).pipe(
+@@ -1287,7 +1284,7 @@ export const layerQueryRunner: Layer.Layer<
+         const headMessageId = usesHostConfig
+           ? yield* Effect.tryPromise({
+               try: () =>
+-                getSessionMessages(
++                loadClaudeSdk().getSessionMessages(
+                   result.sessionId,
+                   input.options.dir === undefined ? {} : { dir: input.options.dir },
+                 ),
+@@ -1303,7 +1300,7 @@ export const layerQueryRunner: Layer.Layer<
+         function* (input: ClaudeAgentSdkSubagentLookupInput) {
+           const messages = yield* Effect.tryPromise({
+             try: () =>
+-              getSubagentMessages(input.sessionId, input.agentId, {
++              loadClaudeSdk().getSubagentMessages(input.sessionId, input.agentId, {
+                 ...(input.dir === null ? {} : { dir: input.dir }),
+                 limit: 1,
+               }),
+@@ -4596,7 +4593,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+         : {};
+       const resolved = yield* Effect.tryPromise({
+         try: () =>
+-          resolveClaudeSettings({
++          loadClaudeSdk().resolveSettings({
+             ...(cwd === null ? {} : { cwd }),
+             settingSources: customHome ? ["project", "local"] : ["user", "project", "local"],
+             serverManagedSettings: claudeSdkBypassSettings(remote),
+@@ -4628,7 +4625,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+       if (Option.isSome(fromEnvironment)) return fromEnvironment.value;
+       const resolved = yield* Effect.tryPromise({
+         try: () =>
+-          resolveClaudeSettings({
++          loadClaudeSdk().resolveSettings({
+             ...(cwd === null ? {} : { cwd }),
+             settingSources: customHome ? ["project", "local"] : ["user", "project", "local"],
+           }),
+diff --git a/apps/server/src/os-jank.ts b/apps/server/src/os-jank.ts
+index 8b30683..d323456 100644
+--- a/apps/server/src/os-jank.ts
++++ b/apps/server/src/os-jank.ts
+@@ -152,7 +152,7 @@ export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
+       // directories and top-level state files before opening the database.
+       const ownedLocations = [
+         "userdata", "userdata/secrets", "userdata/logs", "userdata/attachments",
+-        "userdata/themes", "caches", "worktrees", "runtime",
++        "userdata/themes", "caches", "worktrees", "runtime", "sdk",
+       ];
+       for (const location of ownedLocations) {
+         const directory = paths.join(baseDir, location);
+diff --git a/apps/server/src/provider/ClaudeProvider.ts b/apps/server/src/provider/ClaudeProvider.ts
+index c20152a..f31ae27 100644
+--- a/apps/server/src/provider/ClaudeProvider.ts
++++ b/apps/server/src/provider/ClaudeProvider.ts
+@@ -1,3 +1,4 @@
++import { loadClaudeSdk } from "./ClaudeSdk.ts";
+ import { productName } from "@t3tools/contracts/engineBrand";
+ import {
+   type ClaudeSettings,
+@@ -20,7 +21,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
+ import { createModelCapabilities } from "@t3tools/shared/model";
+ import { resolveSpawnCommand } from "@t3tools/shared/shell";
+ import {
+-  query as claudeQuery,
+   type ModelInfo as ClaudeModelInfo,
+   type Options as ClaudeQueryOptions,
+   type SlashCommand as ClaudeSlashCommand,
+@@ -397,7 +397,7 @@ const probeClaudeCapabilities = (
+       : 0;
+     return yield* Effect.tryPromise({
+       try: async () => {
+-        const q = claudeQuery({
++        const q = loadClaudeSdk().query({
+           // oxlint-disable-next-line require-yield -- never yields, so no prompt reaches the API
+           prompt: (async function* (): AsyncGenerator<SDKUserMessage> {
+             await waitForAbortSignal(abort.signal);
+diff --git a/apps/server/src/provider/ClaudeSdk.ts b/apps/server/src/provider/ClaudeSdk.ts
+new file mode 100644
+index 0000000..0fe9740
+--- /dev/null
++++ b/apps/server/src/provider/ClaudeSdk.ts
+@@ -0,0 +1,5 @@
++import { loadProviderSdk } from "@t3tools/shared/providerSdk";
++
++export function loadClaudeSdk(): typeof import("@anthropic-ai/claude-agent-sdk") {
++  return loadProviderSdk("claudeAgent") as typeof import("@anthropic-ai/claude-agent-sdk");
++}
+diff --git a/apps/server/src/provider/installProviderSdk.ts b/apps/server/src/provider/installProviderSdk.ts
+new file mode 100644
+index 0000000..1602fcd
+--- /dev/null
++++ b/apps/server/src/provider/installProviderSdk.ts
+@@ -0,0 +1,119 @@
++import { createHash } from "node:crypto";
++import { createReadStream } from "node:fs";
++import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
++import { join } from "node:path";
++
++import {
++  type ProviderSdkDriver,
++  providerSdkDirectory,
++  providerSdkInstalled,
++  providerSdkInstallPath,
++  providerSdkMetadata,
++} from "@t3tools/shared/providerSdk";
++
++type Pin = readonly [packageName: string, version: string, integrity: string];
++
++// Runtime tarballs from the frozen engine lock. Claude Code itself is a separate executable
++// installed by the user. The Claude JS entry is self-contained when given that executable.
++const pins: Record<ProviderSdkDriver, readonly Pin[]> = {
++  claudeAgent: [
++    ["@anthropic-ai/claude-agent-sdk","0.3.330","sha512-7om9Xus6tfkeCUCfzg6ilJuN6Z7okkEvJ0mx+ukXa/Id5U/6BGtPkOYni+3ebedwa3b9SVF7A05+ln+/9EoU/w=="],
++  ],
++  cursor: [
++    ["@cursor/sdk","1.2.0","sha512-Nqm2U0zTWrYEDCv3Rdwsfa1gYZWsg+JnY+I2F8BwWSAr3FNo0TZWwyHWoWngZgriF1w02fJ4gjJWaul9zysvgQ=="],
++    ["@cursor/sdk-darwin-arm64","1.2.0","sha512-UkZ/RdxKCpOQ85nRgzSq+g0h+gIw36/lCEvQvomhs5EkSFZW3OwbeEzkAU3UYglZ7t3RNHj3mc5C5cdDtHguvw=="],
++    ["@bufbuild/protobuf","1.10.0","sha512-QDdVFLoN93Zjg36NoQPZfsVH9tZew7wKDKyV5qRdj8ntT4wQCOradQjRaTdwMhWUYsgKsvCINKKm87FdEk96Ag=="],
++    ["@connectrpc/connect","1.7.0","sha512-iNKdJRi69YP3mq6AePRT8F/HrxWCewrhxnLMNm0vpqXAR8biwzRtO6Hjx80C6UvtKJ5sFmffQT7I4Baecz389w=="],
++    ["@connectrpc/connect-web","1.7.0","sha512-qyP0YOnUPRWwCc/VfsoydMJvkb7EyUPr2q9sHgBuJzbADjiqck1gKH5V5ZPzPhTLBvmz5UvG+wiZ5sMRQHU1MQ=="],
++    ["@statsig/js-client","3.31.0","sha512-LFa5E0LjT6sTfZv3sNGoyRLSZ1078+agdgOA+Vm1ecjG+KbSOfBLTW7hMwimrJ29slRwbYDzbtKaPJo/R37N2g=="],
++    ["@statsig/client-core","3.31.0","sha512-SuxQD6TmVszPG7FoMKwTk/uyBuVFk7XnxI3T/E0uyb7PL7GNjONtfsoh+NqBBVUJVse0CUeSFfgJPoZy1ZOslQ=="],
++    ["zod","4.6.7","sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg=="],
++  ],
++};
++const pending = new Map<ProviderSdkDriver, Promise<void>>();
++const maxPackageBytes = 128 * 1024 * 1024;
++
++async function unpack(pin: Pin, stage: string, signal: AbortSignal): Promise<void> {
++  const [name, version, integrity] = pin;
++  const slug = name.split("/").at(-1)!;
++  const url = `https://registry.npmjs.org/${name}/-/${slug}-${version}.tgz`;
++  const archive = join(stage, slug + ".tgz");
++  const destination = join(stage, "node_modules", name);
++  let response: Response;
++  try {
++    response = await fetch(url, { redirect: "error", signal });
++  } catch {
++    throw new Error("Could not reach registry.npmjs.org. Check your internet connection and retry.");
++  }
++  if (!response.ok || !response.body) {
++    throw new Error(`registry.npmjs.org returned HTTP ${response.status} for ${name}@${version}.`);
++  }
++  let length = 0;
++  try {
++    await Bun.write(archive, response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
++      transform(chunk, controller) {
++        length += chunk.length;
++        if (length > maxPackageBytes) throw new Error("Package exceeds the download limit.");
++        controller.enqueue(chunk);
++      },
++    })));
++  } catch {
++    throw new Error(`Could not finish downloading ${name}@${version}. Check your connection and disk space, then retry.`);
++  }
++  const sha512 = createHash("sha512");
++  for await (const chunk of createReadStream(archive)) sha512.update(chunk);
++  if (`sha512-${sha512.digest("base64")}` !== integrity) {
++    throw new Error(`Integrity verification failed for ${name}@${version}.`);
++  }
++  await mkdir(destination, { recursive: true, mode: 0o700 });
++  // Extract the authenticated tarball directly. No package manager or lifecycle scripts run.
++  const tar = Bun.spawn(["/usr/bin/tar", "-xzf", archive, "--strip-components", "1", "-C", destination], {
++    stdout: "ignore",
++    stderr: "ignore",
++    signal,
++  });
++  if (await tar.exited !== 0) throw new Error(`Could not extract ${name}@${version}.`);
++  await rm(archive);
++  const manifest = JSON.parse(await readFile(join(destination, "package.json"), "utf8"));
++  if (manifest.name !== name || manifest.version !== version) {
++    throw new Error(`Unexpected package metadata for ${name}@${version}.`);
++  }
++}
++
++async function install(driver: ProviderSdkDriver): Promise<void> {
++  if (providerSdkInstalled(driver)) return;
++  const root = join(providerSdkDirectory(), "sdk");
++  await mkdir(root, { recursive: true, mode: 0o700 });
++  const stat = await lstat(root);
++  if (!stat.isDirectory() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) {
++    throw new Error("Provider SDK storage must be an owner-only directory.");
++  }
++
++  const stage = await mkdtemp(join(root, ".install-"));
++  try {
++    const signal = AbortSignal.timeout(90_000);
++    const results = await Promise.allSettled(pins[driver].map((pin) => unpack(pin, stage, signal)));
++    for (const result of results) {
++      if (result.status === "rejected") throw result.reason;
++    }
++    await writeFile(join(stage, "installed.json"), JSON.stringify(providerSdkMetadata[driver]), { mode: 0o600 });
++    try {
++      await rename(stage, providerSdkInstallPath(driver));
++    } catch (error) {
++      if (!providerSdkInstalled(driver)) throw error;
++    }
++  } finally {
++    await rm(stage, { recursive: true, force: true });
++  }
++}
++
++export function installProviderSdk(driver: ProviderSdkDriver, version: string): Promise<void> {
++  if (version !== providerSdkMetadata[driver].version) {
++    return Promise.reject(new Error("The SDK version changed. Review the updated provider setup and retry."));
++  }
++  const current = pending.get(driver);
++  if (current) return current;
++  const task = install(driver).finally(() => pending.delete(driver));
++  pending.set(driver, task);
++  return task;
++}
+diff --git a/apps/server/src/ws.ts b/apps/server/src/ws.ts
+index d3005c1..80beafc 100644
+--- a/apps/server/src/ws.ts
++++ b/apps/server/src/ws.ts
+@@ -1,3 +1,5 @@
++import { providerSdkDrivers, providerSdkInstalled, providerSdkMetadata } from "@t3tools/shared/providerSdk";
++import { installProviderSdk } from "./provider/installProviderSdk.ts";
+ import { productName } from "@t3tools/contracts/engineBrand";
+ import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+ import * as Context from "effect/Context";
+@@ -1816,6 +1818,11 @@ export const layerWsRpc = (
+           keybindings: keybindingsConfig.keybindings,
+           issues: keybindingsConfig.issues,
+           providers,
++          providerSdks: providerSdkDrivers.map((driver) => ({
++            driver,
++            ...providerSdkMetadata[driver],
++            installed: providerSdkInstalled(driver),
++          })),
+           ...discovery,
+           observability: {
+             logsDirectoryPath: config.logsDir,
+@@ -2463,6 +2470,15 @@ export const layerWsRpc = (
+         [WS_METHODS.providerAuthLogout]: (input) => providerAuth.logout(input),
+         [WS_METHODS.providerAuthSubscribe]: (input) =>
+           providerAuth.subscribe(input, currentSessionId),
++        [WS_METHODS.providerSdkInstall]: (input) =>
++          Effect.tryPromise({
++            try: () => installProviderSdk(input.driver, input.version),
++            catch: (error) => new ProviderSetupError({
++              instanceId: input.instanceId,
++              operation: "sdk.install",
++              detail: error instanceof Error ? error.message : "Could not install the provider SDK.",
++            }),
++          }).pipe(Effect.as({})),
+         [WS_METHODS.providerInstallStart]: (input) => providerInstallation.start(input),
+         [WS_METHODS.providerInstallCancel]: (input) => providerInstallation.cancel(input),
+         [WS_METHODS.providerInstallSubscribe]: (input) => providerInstallation.subscribe(input),
+diff --git a/packages/contracts/src/rpc.ts b/packages/contracts/src/rpc.ts
+index 403d689..b9543c5 100644
+--- a/packages/contracts/src/rpc.ts
++++ b/packages/contracts/src/rpc.ts
+@@ -430,6 +430,7 @@ export const WS_METHODS = {
+   providerAuthRemoveMethod: "provider.auth.removeMethod",
+   providerAuthLogout: "provider.auth.logout",
+   providerAuthSubscribe: "provider.auth.subscribe",
++  providerSdkInstall: "provider.sdk.install",
+   providerInstallStart: "provider.install.start",
+   providerInstallCancel: "provider.install.cancel",
+   providerInstallSubscribe: "provider.install.subscribe",
+@@ -721,6 +722,16 @@ const WsProviderAuthSubscribeRpc = Rpc.make(WS_METHODS.providerAuthSubscribe, {
+   stream: true,
+ });
+ 
++const WsProviderSdkInstallRpc = Rpc.make(WS_METHODS.providerSdkInstall, {
++  payload: Schema.Struct({
++    instanceId: ProviderSetupInput.fields.instanceId,
++    driver: Schema.Literals(["claudeAgent", "cursor"]),
++    version: Schema.String,
++  }),
++  success: Schema.Struct({}),
++  error: ProviderSetupRpcError,
++});
++
+ const WsProviderInstallStartRpc = Rpc.make(WS_METHODS.providerInstallStart, {
+   payload: ProviderSetupInput,
+   success: ProviderInstallState,
+@@ -1979,6 +1990,7 @@ export const WsRpcGroup = RpcGroup.make(
+   WsProviderAuthRemoveMethodRpc,
+   WsProviderAuthLogoutRpc,
+   WsProviderAuthSubscribeRpc,
++  WsProviderSdkInstallRpc,
+   WsProviderInstallStartRpc,
+   WsProviderInstallCancelRpc,
+   WsProviderInstallSubscribeRpc,
+diff --git a/packages/contracts/src/server.ts b/packages/contracts/src/server.ts
+index 40a1aa8..de5c16b 100644
+--- a/packages/contracts/src/server.ts
++++ b/packages/contracts/src/server.ts
+@@ -607,7 +607,17 @@ export const ServerEventLoopStall = Schema.Struct({
+ });
+ export type ServerEventLoopStall = typeof ServerEventLoopStall.Type;
+ 
++const ProviderSdk = Schema.Struct({
++  driver: Schema.Literals(["claudeAgent", "cursor"]),
++  packageName: Schema.String,
++  version: Schema.String,
++  vendor: Schema.String,
++  terms: Schema.String,
++  installed: Schema.Boolean,
++});
++
+ export const ServerConfig = Schema.Struct({
++  providerSdks: Schema.optionalKey(Schema.Array(ProviderSdk)),
+   environment: ExecutionEnvironmentDescriptor,
+   auth: ServerAuthDescriptor,
+   cwd: TrimmedNonEmptyString,
+diff --git a/packages/provider-cursor/package.json b/packages/provider-cursor/package.json
+index 749e26a..2daaefe 100644
+--- a/packages/provider-cursor/package.json
++++ b/packages/provider-cursor/package.json
+@@ -40,8 +40,10 @@
+       "import": "./src/server/CursorSdk.ts"
+     }
+   },
++  "devDependencies": {
++    "@cursor/sdk": "1.2.0"
++  },
+   "dependencies": {
+-    "@cursor/sdk": "1.2.0",
+     "@t3tools/contracts": "workspace:*",
+     "@t3tools/provider-core": "workspace:*",
+     "@t3tools/shared": "workspace:*",
+diff --git a/packages/provider-cursor/src/server/sdk.ts b/packages/provider-cursor/src/server/sdk.ts
+index 82dd7c0..48e6540 100644
+--- a/packages/provider-cursor/src/server/sdk.ts
++++ b/packages/provider-cursor/src/server/sdk.ts
+@@ -1,20 +1,12 @@
+-// @effect-diagnostics nodeBuiltinImport:off -- The SDK must load from disk beside its Webpack chunks.
+-import { engineNativeRequire } from "@t3tools/shared/engineNative";
++import { loadProviderSdk } from "@t3tools/shared/providerSdk";
+ 
+-// createRequire preserves adjacent Webpack chunks and native modules in bundled/SEA builds.
+-const requireCursorSdk = engineNativeRequire();
+ let sdk: typeof import("@cursor/sdk") | undefined;
+ let sqlite: typeof import("@cursor/sdk/sqlite") | undefined;
+ 
+ export function loadCursorSdk(): typeof import("@cursor/sdk") {
+   if (sdk !== undefined) return sdk;
+-  // Only the staged SDK has its usage-event client removed.
+-  if (!requireCursorSdk.resolve("@cursor/sdk").endsWith("/dist/bundled/index.js")) {
+-    throw new Error("Cursor requires the Notchbee engine bundle.");
+-  }
+-  requireCursorSdk.resolve("@cursor/sdk/notchbee-privacy.json");
+   const start = performance.now();
+-  sdk = requireCursorSdk("@cursor/sdk") as typeof import("@cursor/sdk");
++  sdk = loadProviderSdk("cursor") as typeof import("@cursor/sdk");
+   if (process.env.T3CODE_STARTUP_PROFILE_DIR) {
+     performance.measure("provider.cursor.importSdk", { start });
+   }
+@@ -24,7 +16,7 @@ export function loadCursorSdk(): typeof import("@cursor/sdk") {
+ export function loadCursorSqlite(): typeof import("@cursor/sdk/sqlite") {
+   if (sqlite !== undefined) return sqlite;
+   const start = performance.now();
+-  sqlite = requireCursorSdk("@cursor/sdk/sqlite") as typeof import("@cursor/sdk/sqlite");
++  sqlite = loadProviderSdk("cursor", true) as typeof import("@cursor/sdk/sqlite");
+   if (process.env.T3CODE_STARTUP_PROFILE_DIR) {
+     performance.measure("provider.cursor.importSqliteStore", { start });
+   }
+diff --git a/packages/shared/package.json b/packages/shared/package.json
+index 3510987..36f55b5 100644
+--- a/packages/shared/package.json
++++ b/packages/shared/package.json
+@@ -527,6 +527,10 @@
+       "types": "./src/speech.ts",
+       "import": "./src/speech.ts"
+     },
++    "./providerSdk": {
++      "types": "./src/providerSdk.ts",
++      "import": "./src/providerSdk.ts"
++    },
+     "./engineNative": {
+       "types": "./src/engineNative.ts",
+       "import": "./src/engineNative.ts"
+diff --git a/packages/shared/src/providerSdk.ts b/packages/shared/src/providerSdk.ts
+new file mode 100644
+index 0000000..a08a1ff
+--- /dev/null
++++ b/packages/shared/src/providerSdk.ts
+@@ -0,0 +1,67 @@
++// @effect-diagnostics nodeBuiltinImport:off -- SDKs are resolved from a private runtime directory.
++import { lstatSync } from "node:fs";
++import { createRequire } from "node:module";
++import { join } from "node:path";
++
++export const providerSdkDrivers = ["claudeAgent", "cursor"] as const;
++export type ProviderSdkDriver = (typeof providerSdkDrivers)[number];
++
++export const providerSdkMetadata = {
++  claudeAgent: {
++    packageName: "@anthropic-ai/claude-agent-sdk",
++    version: "0.3.330",
++    vendor: "Anthropic",
++    terms: "https://code.claude.com/docs/en/legal-and-compliance",
++  },
++  cursor: {
++    packageName: "@cursor/sdk",
++    version: "1.2.0",
++    vendor: "Anysphere",
++    terms: "https://cursor.com/terms-of-service",
++  },
++} as const;
++
++const entries = {
++  claudeAgent: "sdk.mjs",
++  cursor: "dist/bundled/index.js",
++} as const;
++
++// The engine launcher and its history worker set this after resolving their own storage root.
++let baseDirectory: string | undefined;
++export function configureProviderSdkDirectory(directory: string): void {
++  baseDirectory = directory;
++}
++
++export function providerSdkDirectory(): string {
++  if (baseDirectory === undefined) throw new Error("Provider SDK storage has not been configured.");
++  return baseDirectory;
++}
++
++export function providerSdkInstallPath(driver: ProviderSdkDriver): string {
++  return join(providerSdkDirectory(), "sdk", driver + "-" + providerSdkMetadata[driver].version);
++}
++
++export function providerSdkInstalled(driver: ProviderSdkDriver): boolean {
++  if (baseDirectory === undefined) return false;
++  const root = providerSdkInstallPath(driver);
++  for (const directory of [join(baseDirectory, "sdk"), root]) {
++    const stat = lstatSync(directory, { throwIfNoEntry: false });
++    if (!stat?.isDirectory() || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()) {
++      return false;
++    }
++  }
++  return lstatSync(join(root, "installed.json"), { throwIfNoEntry: false })?.isFile() === true;
++}
++
++export function loadProviderSdk(driver: ProviderSdkDriver, cursorSqlite = false): unknown {
++  const metadata = providerSdkMetadata[driver];
++  if (!providerSdkInstalled(driver)) {
++    throw new Error(`Install ${metadata.packageName} from Settings → Providers to use this provider.`);
++  }
++  const directory = providerSdkInstallPath(driver);
++  const entry = driver === "cursor" && cursorSqlite ? "dist/bundled/sqlite.js" : entries[driver];
++  // Absolute paths bypass Bun's compiled package resolution and never fall back to a global SDK.
++  return createRequire(join(directory, "loader.mjs"))(
++    join(directory, "node_modules", metadata.packageName, entry),
++  );
++}

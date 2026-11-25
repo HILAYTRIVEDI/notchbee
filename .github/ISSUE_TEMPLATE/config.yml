@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a vulnerability privately
+    url: https://github.com/HILAYTRIVEDI/notchbee/security/advisories/new
+    about: Use GitHub's private reporting form for security issues.

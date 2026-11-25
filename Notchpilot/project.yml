@@ -1,0 +1,84 @@
+name: Notchpilot
+options:
+  bundleIdPrefix: com.hilaytrivedi
+  deploymentTarget:
+    macOS: "26.0"
+  xcodeVersion: "26.3"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+configFiles:
+  Debug: Notchpilot.xcconfig
+  Release: Notchpilot.xcconfig
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: "2.10.1"
+  NotchpilotCore:
+    path: ../NotchpilotCore
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    exactVersion: "3.1.0"
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    exactVersion: "0.18.4"
+    traits: []
+targets:
+  Notchpilot:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+        excludes:
+          - Resources/Info.plist
+          - Resources/Notchpilot.entitlements
+    dependencies:
+      - package: NotchpilotCore
+      - package: Sparkle
+      - package: KeyboardShortcuts
+      - package: FluidAudio
+    postBuildScripts:
+      - name: Bundle and sign engine
+        script: /bin/bash "$SRCROOT/../scripts/bundle-engine.sh"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/notchbee-engine"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/LICENSE"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/THIRD_PARTY_NOTICES"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/engine-speech-models.md"
+        basedOnDependencyAnalysis: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hilaytrivedi.Notchbee
+        PRODUCT_NAME: Notchbee
+        PRODUCT_MODULE_NAME: Notchpilot
+        SPARKLE_FEED_URL: https://github.com/HILAYTRIVEDI/notchbee/releases/latest/download/appcast.xml
+        INFOPLIST_FILE: Sources/Resources/Info.plist
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_ENTITLEMENTS: Sources/Resources/Notchpilot.entitlements
+      configs:
+        Release:
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+          OTHER_CODE_SIGN_FLAGS: "--options runtime"
+  NotchpilotTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Notchpilot
+      - package: NotchpilotCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hilaytrivedi.NotchbeeTests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Notchbee.app/Contents/MacOS/Notchbee"
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_TESTING_SEARCH_PATHS: YES
+schemes:
+  Notchpilot:
+    build:
+      targets:
+        Notchpilot: all
+        NotchpilotTests: [test]
+    test:
+      targets:
+        - NotchpilotTests
