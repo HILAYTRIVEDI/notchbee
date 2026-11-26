@@ -1,0 +1,48 @@
+diff --git a/apps/server/src/engineCli.ts b/apps/server/src/engineCli.ts
+index 67bbda1..5d1180a 100644
+--- a/apps/server/src/engineCli.ts
++++ b/apps/server/src/engineCli.ts
+@@ -54,7 +54,10 @@ const requiredBootstrap = (fd: number) =>
+       const envelope = Option.flatten(read);
+       return Option.isSome(envelope) && envelope.value.desktopBootstrapToken.trim().length >= 32
+         ? Effect.succeed(envelope.value)
+-        : Effect.fail(new UserError({ userMessage: `Invalid or missing bootstrap envelope on fd ${fd}.` }));
++        : Effect.fail(new UserError({
++            cause: "Invalid native bootstrap envelope.",
++            userMessage: `Invalid or missing bootstrap envelope on fd ${fd}.`,
++          }));
+     }),
+   );
+ 
+@@ -75,7 +78,7 @@ const launch = Effect.fn("engine.launch")(function* (input: {
+   });
+   const fd = Option.getOrUndefined(Option.orElse(input.bootstrapFd, () => env.fd));
+   if (fd === undefined) {
+-    return yield* new UserError({ userMessage: "An inherited --bootstrap-fd is required to launch the engine." });
++    return yield* new UserError({ cause: "An inherited --bootstrap-fd is required to launch the engine." });
+   }
+   const bootstrap = yield* requiredBootstrap(fd);
+   const port = Option.getOrElse(Option.orElse(input.port, () => env.port), () => bootstrap.port);
+@@ -112,7 +115,7 @@ const launch = Effect.fn("engine.launch")(function* (input: {
+     noBrowser: true,
+     startupPresentation: "headless",
+     desktopBootstrapToken: bootstrap.desktopBootstrapToken,
+-    desktopBootstrapSecret: bootstrap.desktopBootstrapSecret,
++    ...(bootstrap.desktopBootstrapSecret === undefined ? {} : { desktopBootstrapSecret: bootstrap.desktopBootstrapSecret }),
+     shellEnvironmentPrepared: bootstrap.shellEnvironmentPrepared,
+     desktopTelemetryFd: undefined,
+     desktopTelemetryControlFd: undefined,
+diff --git a/apps/server/src/os-jank.ts b/apps/server/src/os-jank.ts
+index d597bea..bb605e7 100644
+--- a/apps/server/src/os-jank.ts
++++ b/apps/server/src/os-jank.ts
+@@ -171,6 +171,8 @@ export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
+       }
+       return baseDir;
+     },
+-    catch: (error) => new UserError({ userMessage: `Invalid engine data directory: ${error instanceof Error ? error.message : String(error)}` }),
++    catch: (error) => new UserError({
++      cause: `Invalid engine data directory: ${error instanceof Error ? error.message : String(error)}`,
++    }),
+   });
+ });

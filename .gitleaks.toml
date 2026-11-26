@@ -1,0 +1,7 @@
+# Keyboard shortcut definitions such as { key: "mod+shift+enter" } match the generic API key rule.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Keybinding strings"
+paths = ['''engine/packages/shared/src/keybindings\.ts''']

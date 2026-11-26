@@ -1,0 +1,10 @@
+diff --git a/dist/NodeWS.js b/dist/NodeWS.js
+--- a/dist/NodeWS.js
++++ b/dist/NodeWS.js
+@@ -10,5 +10,5 @@
+  * @category re-exports
+  * @since 4.1.0
+  */
+-export * from "ws";
++export { WebSocket, WebSocketServer, Server, Receiver, Sender, createWebSocketStream } from "ws";
+ //# sourceMappingURL=NodeWS.js.map

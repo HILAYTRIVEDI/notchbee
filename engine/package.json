@@ -1,0 +1,26 @@
+{
+  "name": "notchpilot-engine-workspace",
+  "private": true,
+  "workspaces": [
+    "apps/server",
+    "packages/*"
+  ],
+  "overrides": {
+    "@effect/platform-node": "4.1.2",
+    "@effect/platform-node-shared": "4.1.2",
+    "@ff-labs/fff-node": "0.11.0",
+    "effect": "4.1.2",
+    "mdast-util-to-hast": "13.2.1",
+    "micromark": "4.0.2",
+    "micromark-extension-gfm-table": "2.1.1",
+    "node-pty": "1.2.0-beta.15",
+    "yaml": "^2.9.0"
+  },
+  "patchedDependencies": {
+    "@ff-labs/fff-node@0.11.0": "dependency-patches/@ff-labs__fff-node@0.11.0.patch",
+    "@muse-code/sdk@1.4.6": "dependency-patches/@muse-code__sdk@1.4.6.patch",
+    "micromark-extension-gfm-table@2.1.1": "dependency-patches/micromark-extension-gfm-table@2.1.1.patch",
+    "node-pty@1.2.0-beta.15": "dependency-patches/node-pty@1.2.0-beta.15.patch",
+    "@effect/platform-node-shared@4.1.2": "local-dependency-patches/@effect+platform-node-shared@4.1.2.patch"
+  }
+}

@@ -1,0 +1,39 @@
+name: Bug report
+description: Report a reproducible problem with Notchbee
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Report security issues privately through the link in the issue chooser, not here.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you expected, what happened instead, and the steps to reproduce it.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Notchbee version
+      description: Settings → Engine & About, or the commit you built from.
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac model
+      placeholder: macOS 26.1, MacBook Pro M3
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      multiple: true
+      options: [Not provider-specific, Codex, Claude, Cursor, OpenCode, Grok, Antigravity, Kiro, Pi, Muse, fx, Other]
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs or screenshots
+      description: Redact credentials, private URLs, file paths and chat content first.

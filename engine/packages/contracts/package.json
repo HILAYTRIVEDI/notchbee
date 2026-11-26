@@ -1,0 +1,30 @@
+{
+  "name": "@t3tools/contracts",
+  "version": "0.1.8",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./settings": {
+      "types": "./src/settings.ts",
+      "import": "./src/settings.ts"
+    },
+    "./relay": {
+      "types": "./src/relay.ts",
+      "import": "./src/relay.ts"
+    },
+    "./engineBrand": {
+      "types": "./src/engineBrand.ts",
+      "import": "./src/engineBrand.ts"
+    }
+  },
+  "dependencies": {
+    "effect": "4.1.2"
+  }
+}

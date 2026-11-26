@@ -1,0 +1,133 @@
+diff --git a/apps/server/src/environment/ServerEnvironment.ts b/apps/server/src/environment/ServerEnvironment.ts
+index 9e29b0f..ad69a24 100644
+--- a/apps/server/src/environment/ServerEnvironment.ts
++++ b/apps/server/src/environment/ServerEnvironment.ts
+@@ -235,7 +235,6 @@ export const make = Effect.gen(function* () {
+       storageCleanup: true,
+       storageCleanupRun: true,
+       databaseStorage: true,
+-      otlpEndpointCheck: true,
+       projectWorktreeCleanup: true,
+       settledWorktreeCleanup: true,
+       worktreesDirectory: true,
+diff --git a/apps/server/src/http.ts b/apps/server/src/http.ts
+index 38c93ed..b513c1f 100644
+--- a/apps/server/src/http.ts
++++ b/apps/server/src/http.ts
+@@ -14,6 +14,7 @@ import { pipe } from "effect/Function";
+ import {
+   HttpMiddleware,
+   HttpRouter,
++  HttpServer,
+   HttpServerResponse,
+   HttpServerRequest,
+ } from "effect/http";
+@@ -238,6 +239,29 @@ export const layerHttpCompression = HttpRouter.middleware(HttpMiddleware.compres
+ export const layerBrowserApiCors = Layer.unwrap(
+   Effect.gen(function* () {
+     const config = yield* ServerConfig.ServerConfig;
++    if (config.startupPresentation === "headless") {
++      const { address } = yield* HttpServer.HttpServer;
++      if (typeof address === "string" || !("port" in address)) {
++        return yield* Effect.die("Expected a TCP listener");
++      }
++      const hosts = new Set([`127.0.0.1:${address.port}`, `localhost:${address.port}`]);
++      const forbidden = HttpServerResponse.empty({ status: 403 });
++      // The native listener serves no cross-origin clients. Check authority before any route,
++      // including public discovery, capability URLs, and WebSocket upgrades.
++      return HttpRouter.middleware(
++        (httpEffect) => Effect.flatMap(HttpServerRequest.HttpServerRequest, ({ headers }) => {
++          const host = headers.host?.toLowerCase();
++          const origin = headers.origin;
++          const site = headers["sec-fetch-site"];
++          return host === undefined || !hosts.has(host) ||
++            (origin !== undefined && origin !== `http://${host}`) ||
++            site === "cross-site" || site === "same-site"
++            ? Effect.succeed(forbidden)
++            : httpEffect;
++        }),
++        { global: true },
++      );
++    }
+     const devOrigin = config.devUrl?.origin;
+     // Credentialed dev requests need explicit Vite/Electron origins; packaged desktop uses the default wildcard.
+     return HttpRouter.cors({
+diff --git a/apps/server/src/orchestration-v2/ThreadTitleRegenerationService.ts b/apps/server/src/orchestration-v2/ThreadTitleRegenerationService.ts
+index 395e876..550aaf8 100644
+--- a/apps/server/src/orchestration-v2/ThreadTitleRegenerationService.ts
++++ b/apps/server/src/orchestration-v2/ThreadTitleRegenerationService.ts
+@@ -18,6 +18,7 @@ import * as Layer from "effect/Layer";
+ import * as Option from "effect/Option";
+ import * as Schedule from "effect/Schedule";
+ 
++import * as ServerConfig from "../config.ts";
+ import * as ServerSettings from "../serverSettings.ts";
+ import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+ import type { OrchestratorV2Error } from "./Orchestrator.ts";
+@@ -52,6 +53,7 @@ const make = Effect.gen(function* () {
+   const serverSettings = yield* ServerSettings.ServerSettingsService;
+   const textGeneration = yield* TextGeneration.TextGeneration;
+   const fileSystem = yield* FileSystem.FileSystem;
++  const config = yield* ServerConfig.ServerConfig;
+ 
+   const complete = (input: {
+     readonly threadId: ThreadId;
+@@ -155,7 +157,8 @@ const make = Effect.gen(function* () {
+       }
+ 
+       // A deleted source should not cost the fork its title.
+-      const inherited = yield* forkSource(projection.thread).pipe(
++      const privateInitialTitle = config.startupPresentation === "headless" && input.kind.type === "initial";
++      const inherited = privateInitialTitle ? undefined : yield* forkSource(projection.thread).pipe(
+         Effect.orElseSucceed(() => undefined),
+       );
+       const settings = resolveProjectSettings(
+@@ -174,7 +177,7 @@ const make = Effect.gen(function* () {
+         ...(input.kind.type === "regenerate" ? { previousTitle: projection.thread.title } : {}),
+         ...(inherited === undefined ? {} : { forkSource: inherited }),
+         instructions: settings.threadTitleInstructions,
+-        modelSelection: settings.textGenerationModelSelection,
++        modelSelection: privateInitialTitle ? projection.thread.modelSelection : settings.textGenerationModelSelection,
+         projectId: projection.thread.projectId,
+       });
+       const generatedTitle = result.title.trim();
+diff --git a/apps/server/src/textGeneration/TextGeneration.ts b/apps/server/src/textGeneration/TextGeneration.ts
+index 612d473..1fb14ca 100644
+--- a/apps/server/src/textGeneration/TextGeneration.ts
++++ b/apps/server/src/textGeneration/TextGeneration.ts
+@@ -13,6 +13,7 @@ import {
+   defaultTextGenerationModel,
+   fallbackTextGenerationModelSelection,
+ } from "@t3tools/shared/serverSettings";
++import * as ServerConfig from "../config.ts";
+ import * as ServerSettings from "../serverSettings.ts";
+ import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
+ import { TextGenerationError } from "@t3tools/contracts";
+@@ -78,6 +79,8 @@ export const make = Effect.gen(function* () {
+   const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+   const serverSettings = yield* ServerSettings.ServerSettingsService;
+   const textGenerators = yield* TextGenerators.TextGenerators;
++  const config = yield* ServerConfig.ServerConfig;
++  const embedded = config.startupPresentation === "headless";
+   const generate = Effect.fn("TextGeneration.generate")(function* <A>(
+     operation: TextGenerationOp,
+     selection: ModelSelection,
+@@ -111,7 +114,8 @@ export const make = Effect.gen(function* () {
+       (selected?.enabled === true &&
+         selected.status === "error" &&
+         (!selected.installed || selected.auth.status === "unauthenticated"));
+-    if (unusable || exhaustedUsageWindow(selected, now, selection.model)) {
++    // In the bundled app, an unavailable model must not forward the input to another provider.
++    if (!embedded && (unusable || exhaustedUsageWindow(selected, now, selection.model))) {
+       const settings = yield* serverSettings.getSettings.pipe(
+         Effect.mapError(
+           (cause) =>
+@@ -207,7 +211,7 @@ export const make = Effect.gen(function* () {
+           Effect.gen(function* () {
+             const linkedContext =
+               input.linkedContext ??
+-              (yield* ThreadTitleLinks.resolveThreadTitleLinks(input).pipe(
++              (embedded ? undefined : yield* ThreadTitleLinks.resolveThreadTitleLinks(input).pipe(
+                 Effect.provideService(
+                   SourceControlProviderRegistry.SourceControlProviderRegistry,
+                   sourceControl,
