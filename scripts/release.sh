@@ -71,7 +71,8 @@ fi
 version="$(plutil -extract CFBundleShortVersionString raw "$plist")"
 build="$(plutil -extract CFBundleVersion raw "$plist")"
 name="Notchbee-$version-$build.dmg"
-uvx --from dmgbuild==1.6.7 dmgbuild -s "$root/scripts/dmg-settings.py" -D "app=$app" Notchbee "$stage/$name"
+uvx --from dmgbuild==1.6.7 dmgbuild -s "$root/scripts/dmg-settings.py" -D "app=$app" \
+  -D "icon=$app/Contents/Resources/AppIcon.icns" Notchbee "$stage/$name"
 if [[ "$identity" != "-" ]]; then codesign --sign "$identity" "$stamp" "$stage/$name"; fi
 if [[ -n "$profile" ]]; then notarize "$stage/$name" "$stage/$name"; fi
 notes="$root/docs/release-notes/$version.md"

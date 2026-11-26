@@ -53,6 +53,7 @@ targets:
         PRODUCT_MODULE_NAME: Notchpilot
         SPARKLE_FEED_URL: https://github.com/HILAYTRIVEDI/notchbee/releases/latest/download/appcast.xml
         INFOPLIST_FILE: Sources/Resources/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_ENTITLEMENTS: Sources/Resources/Notchpilot.entitlements
       configs:
