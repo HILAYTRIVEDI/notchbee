@@ -45,11 +45,12 @@ Releases are built and uploaded by hand. CI does not publish them because the Sp
 
 1. Bump `CFBundleShortVersionString` and `CFBundleVersion` in `Notchpilot/Sources/Resources/Info.plist`, add `docs/release-notes/<version>.md` and a `CHANGELOG.md` entry, and commit.
 2. Run `scripts/release.sh` on an Apple Silicon Mac with Xcode, XcodeGen, Bun 1.4.1 and `uv`.
-3. Tag the commit and create the release:
+3. Tag the commit and create the release. The extra `Notchbee.dmg` copy keeps the website's Download link (`releases/latest/download/Notchbee.dmg`) pointing at the newest version:
    ```sh
    git tag v<version> && git push origin v<version>
+   cp build/release/Notchbee-<version>-<build>.dmg build/release/Notchbee.dmg
    gh release create v<version> --title "Notchbee <version>" \
      --notes-file docs/release-notes/<version>.md \
-     build/release/Notchbee-<version>-<build>.dmg build/release/appcast.xml
+     build/release/Notchbee-<version>-<build>.dmg build/release/Notchbee.dmg build/release/appcast.xml
    ```
 4. Check that `https://github.com/HILAYTRIVEDI/notchbee/releases/latest/download/appcast.xml` serves the new appcast, then update an installed older copy from **Check for Updates…**.

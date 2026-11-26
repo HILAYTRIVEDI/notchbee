@@ -2,6 +2,12 @@
 
 Notable changes to Notchbee. Versions follow [Semantic Versioning](https://semver.org).
 
+## 1.0.1 — 2026-11-26
+
+### Changed
+
+- Added the app icon: the notch with its glowing edge and a bee. The disk image uses it as its volume icon.
+
 ## 1.0.0 — 2026-11-26
 
 First public release.
