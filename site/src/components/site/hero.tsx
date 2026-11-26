@@ -5,7 +5,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Accent } from "./accent";
 import { AppleMark, GitHubMark } from "./icons";
-import { NotchDemo } from "./notch-demo";
+import { LaunchVideo } from "./launch-video";
 import { DOWNLOAD_URL, GITHUB_URL } from "./site-links";
 
 const LINES: { word: string; accent?: boolean }[][] = [
@@ -100,7 +100,7 @@ export function Hero() {
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 1, delay: 1.1, ease: [0.22, 1, 0.36, 1] }}
       >
-        <NotchDemo />
+        <LaunchVideo />
       </motion.div>
     </section>
   );
