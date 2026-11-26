@@ -6,7 +6,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { GitHubMark, NotchMark } from "./icons";
 import { notchPath } from "./notch-shape";
-import { GITHUB_URL } from "./site-links";
+import { DOWNLOAD_URL, GITHUB_URL } from "./site-links";
 
 const HEIGHT = 58;
 type Phase = "sweep" | "done" | "rest";
@@ -132,17 +132,17 @@ export function NotchNav() {
               <GitHubMark className="size-3.5" />
               <span className="hidden sm:inline">GitHub</span>
             </a>
-            <span
-              aria-disabled
-              title="Download is coming soon"
+            <a
+              href={DOWNLOAD_URL}
+              target="_blank"
+              rel="noreferrer"
               className={cn(
                 buttonVariants({ size: "sm" }),
-                "cursor-not-allowed rounded-full bg-ink px-3 text-white hover:bg-ink",
+                "rounded-full bg-ink px-3 text-white hover:bg-ink/90",
               )}
             >
               Download
-              <span className="rounded-full bg-white/15 px-1.5 py-px text-[10.5px] font-medium">Soon</span>
-            </span>
+            </a>
           </div>
         </nav>
       </div>

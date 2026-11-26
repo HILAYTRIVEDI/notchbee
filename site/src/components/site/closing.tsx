@@ -2,9 +2,9 @@ import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Accent } from "./accent";
 import { AppleMark, GitHubMark, NotchMark } from "./icons";
-import { GITHUB_URL } from "./site-links";
+import { DOWNLOAD_URL, GITHUB_URL } from "./site-links";
 
-const FACTS = ["macOS 14 or later", "Claude and Codex", "Dictation stays on your Mac", "Open source"];
+const FACTS = ["macOS 26 on Apple Silicon", "Codex, Claude, Cursor and more", "Dictation stays on your Mac", "Open source"];
 
 export function Closing() {
   return (
@@ -18,8 +18,8 @@ export function Closing() {
           Put your agents <Accent>where you already look.</Accent>
         </h2>
         <p className="mx-auto mt-5 max-w-xl text-[17px] leading-relaxed tracking-[-0.01em] text-slate">
-          Notchbee is open source. Read the code, file an issue or send a pull request. A signed download is on the
-          way.
+          Notchbee is free and open source. Download the latest release, read the code, file an issue or send a pull
+          request.
         </p>
         <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
           <a
@@ -34,18 +34,19 @@ export function Closing() {
             <GitHubMark className="size-4" />
             View on GitHub
           </a>
-          <span
-            aria-disabled
-            title="Download is coming soon"
+          <a
+            href={DOWNLOAD_URL}
+            target="_blank"
+            rel="noreferrer"
             className={cn(
               buttonVariants({ variant: "outline", size: "lg" }),
-              "h-11 cursor-not-allowed gap-2 rounded-full border-ink/12 bg-canvas px-5 text-[15px] tracking-[-0.01em] text-ink/70 hover:bg-canvas",
+              "h-11 gap-2 rounded-full border-ink/12 bg-canvas px-5 text-[15px] tracking-[-0.01em] text-ink hover:bg-white",
             )}
           >
             <AppleMark className="size-4 -translate-y-px" />
             Download for macOS
-            <span className="rounded-full bg-ink/[0.06] px-2 py-0.5 text-[11px] font-medium text-slate">Soon</span>
-          </span>
+            <span className="rounded-full bg-ink/[0.06] px-2 py-0.5 text-[11px] font-medium text-slate">macOS 26+</span>
+          </a>
         </div>
         <ul className="mt-12 flex flex-wrap justify-center gap-x-8 gap-y-2 text-[14px] tracking-[-0.01em] text-slate">
           {FACTS.map((fact) => (

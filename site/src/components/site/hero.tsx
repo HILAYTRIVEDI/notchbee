@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { Accent } from "./accent";
 import { AppleMark, GitHubMark } from "./icons";
 import { NotchDemo } from "./notch-demo";
-import { GITHUB_URL } from "./site-links";
+import { DOWNLOAD_URL, GITHUB_URL } from "./site-links";
 
 const LINES: { word: string; accent?: boolean }[][] = [
   [{ word: "Your" }, { word: "coding" }, { word: "agents," }],
@@ -78,18 +78,19 @@ export function Hero() {
             <GitHubMark className="size-4" />
             View on GitHub
           </a>
-          <span
-            aria-disabled
-            title="Download is coming soon"
+          <a
+            href={DOWNLOAD_URL}
+            target="_blank"
+            rel="noreferrer"
             className={cn(
               buttonVariants({ variant: "outline", size: "lg" }),
-              "h-11 cursor-not-allowed gap-2 rounded-full border-ink/12 bg-white/70 px-5 text-[15px] tracking-[-0.01em] text-ink/70 hover:bg-white/70",
+              "h-11 gap-2 rounded-full border-ink/12 bg-white/70 px-5 text-[15px] tracking-[-0.01em] text-ink hover:bg-white",
             )}
           >
             <AppleMark className="size-4 -translate-y-px" />
             Download for macOS
-            <span className="rounded-full bg-ink/[0.06] px-2 py-0.5 text-[11px] font-medium text-slate">Soon</span>
-          </span>
+            <span className="rounded-full bg-ink/[0.06] px-2 py-0.5 text-[11px] font-medium text-slate">macOS 26+</span>
+          </a>
         </motion.div>
       </div>
 
