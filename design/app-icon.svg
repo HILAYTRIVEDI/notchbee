@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#e6eaf3"/>
+    </linearGradient>
+    <linearGradient id="comet" x1="0" x2="1">
+      <stop offset="0" stop-color="#73a8fd"/><stop offset="1" stop-color="#9e73ff"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#7c5cf6" stop-opacity="0.45"/><stop offset="1" stop-color="#3d7bf7" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur"><feGaussianBlur stdDeviation="22"/></filter>
+    <clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <g clip-path="url(#sq)">
+    <ellipse cx="512" cy="470" rx="300" ry="130" fill="url(#glow)"/>
+    <!-- The site's NotchMark (28 x 16 viewBox), scaled and hung from the top edge -->
+    <g transform="translate(176 64) scale(24)">
+      <path d="M4 4.5 V9.5 Q4 14.5 9 14.5 H19 Q24 14.5 24 9.5 V4.5" fill="none" stroke="url(#comet)" stroke-width="2.4" stroke-linecap="round" filter="url(#blur)" opacity="0.9"/>
+      <path d="M-10 0 H38 V1.5 H27 C25 1.5 24 2.5 24 4.5 V9.5 Q24 14.5 19 14.5 H9 Q4 14.5 4 9.5 V4.5 C4 2.5 3 1.5 1 1.5 H-10 Z" fill="#000"/>
+      <path d="M4 4.5 V9.5 Q4 14.5 9 14.5 H19 Q24 14.5 24 9.5 V4.5" fill="none" stroke="url(#comet)" stroke-width="1.1" stroke-linecap="round"/>
+    </g>
+
+    <!-- Flight trail from the notch's glowing edge -->
+    <path d="M400 475 C 360 600, 410 700, 470 710" fill="none" stroke="url(#comet)" stroke-width="10" stroke-linecap="round" stroke-dasharray="2 26" opacity="0.8"/>
+    <!-- Bee, tilted as if flying up and right -->
+    <g transform="translate(600 690) rotate(-18) scale(1.3)">
+      <ellipse cx="-18" cy="-58" rx="44" ry="62" fill="#ffffff" fill-opacity="0.85" stroke="#9e73ff" stroke-opacity="0.55" stroke-width="5" transform="rotate(-28 -18 -58)"/>
+      <ellipse cx="34" cy="-62" rx="40" ry="58" fill="#ffffff" fill-opacity="0.85" stroke="#73a8fd" stroke-opacity="0.55" stroke-width="5" transform="rotate(22 34 -62)"/>
+      <clipPath id="beebody"><ellipse cx="0" cy="0" rx="96" ry="66"/></clipPath>
+      <ellipse cx="0" cy="0" rx="96" ry="66" fill="#f6b91a"/>
+      <g clip-path="url(#beebody)" fill="#0a0c14">
+        <rect x="-38" y="-80" width="26" height="160"/>
+        <rect x="10" y="-80" width="26" height="160"/>
+        <rect x="58" y="-80" width="60" height="160"/>
+      </g>
+      <ellipse cx="-30" cy="-26" rx="44" ry="14" fill="#ffffff" fill-opacity="0.35"/>
+      <path d="M-94 -6 L-124 0 L-94 8 Z" fill="#0a0c14"/>
+      <circle cx="74" cy="-12" r="9" fill="#ffffff"/>
+      <path d="M84 -50 Q 98 -92 122 -100" fill="none" stroke="#0a0c14" stroke-width="7" stroke-linecap="round"/>
+      <path d="M68 -56 Q 72 -100 92 -116" fill="none" stroke="#0a0c14" stroke-width="7" stroke-linecap="round"/>
+      <circle cx="122" cy="-100" r="8" fill="#0a0c14"/>
+      <circle cx="92" cy="-116" r="8" fill="#0a0c14"/>
+    </g>
+  </g>
+</svg>
