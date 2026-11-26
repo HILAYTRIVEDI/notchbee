@@ -11,7 +11,11 @@ Start sessions, follow progress, approve tool calls and talk to your agents with
 [![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-111111.svg)](#requirements)
 [![No telemetry](https://img.shields.io/badge/telemetry-none-22c55e.svg)](PRIVACY.md)
 
-[Download](https://github.com/HILAYTRIVEDI/notchbee/releases/latest) · [Features](#features) · [Privacy](#privacy) · [Build from source](#build-from-source) · [Contributing](CONTRIBUTING.md)
+[Download](https://github.com/HILAYTRIVEDI/notchbee/releases/latest/download/Notchbee.dmg) · [Website](https://notchbee.vercel.app) · [Features](#features) · [Privacy](#privacy) · [Build from source](#build-from-source) · [Contributing](CONTRIBUTING.md)
+
+<a href="https://notchbee.vercel.app"><img src="docs/images/hero.jpg" alt="Notchbee: your coding agents, living in the notch. Watch the 21-second video on notchbee.vercel.app." width="880"></a>
+
+<sub>▶ Watch the 21-second video on <a href="https://notchbee.vercel.app">notchbee.vercel.app</a></sub>
 
 </div>
 
@@ -22,6 +26,21 @@ Start sessions, follow progress, approve tool calls and talk to your agents with
 Coding agents work for minutes at a time, and checking on them means switching windows over and over. Notchbee puts them in the one place on your screen that's always visible and never in the way. Hover over the notch to see what every agent is doing, answer an approval, or start the next task, then move the pointer away and carry on.
 
 It runs a bundled local engine, works with the agents you already use, and sends **no telemetry of any kind**.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td><img src="docs/images/new-session.jpg" alt="The New tab: pick a project, provider and model, then type a prompt."></td>
+    <td><img src="docs/images/approval.jpg" alt="A shell command waiting in the notch, approved with Command-Return."></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/done.jpg" alt="The green Claude finished card dropping from the notch."></td>
+    <td><img src="docs/images/workspace.jpg" alt="The workspace menu: branch, open pull request, commit, push and pull."></td>
+  </tr>
+</table>
+
+Screenshots use the app's built-in demo data.
 
 ## Features
 
